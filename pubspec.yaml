@@ -45,10 +45,12 @@ dependencies:
   pdfx: ^2.9.2
   open_filex: ^4.7.0
   share_plus: ^11.1.0
+  flutter_secure_storage: ^9.2.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

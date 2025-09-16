@@ -17,7 +17,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Dashboard',
       theme: ThemeData(
-        fontFamily: 'Montserrat', // You might need to add this font to your project
+        fontFamily: 'Montserrat',
         primaryColor: const Color(0xFF3B5998),
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3B5998)),
       ),
@@ -26,9 +26,8 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// Colors from the design
+// Colors
 const kPrimaryBlue = Color(0xFF3B5998);
-const kShadowColor = Color(0xFFE5E5E5);
 
 class Dashboardpage extends StatefulWidget {
   const Dashboardpage({super.key});
@@ -68,9 +67,7 @@ class _DashboardpageState extends State<Dashboardpage> {
                 birthdayCount++;
               }
             }
-          } catch (_) {
-            // ignore parse errors
-          }
+          } catch (_) {}
         }
       }
 
@@ -120,27 +117,92 @@ class _DashboardpageState extends State<Dashboardpage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(120),
+        child: AppBar(
+          automaticallyImplyLeading: false,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          flexibleSpace: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Background Image
+              Container(
+                decoration: const BoxDecoration(
+                  image: DecorationImage(
+                    image: AssetImage("assets/images/Background2.jpeg"),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+              // Title Section
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      const Text(
+                        '',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w400,
+                          color: Color.fromARGB(255, 214, 212, 212),
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center, // Aligns children vertically
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8), // rounded logo
+                            child: Image.asset(
+                              "assets/images/logo2.png",
+                              height: 40,
+                              width: 70,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'Maruthi Insurance care ,',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
       backgroundColor: Colors.white,
       body: SafeArea(
         child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 20),
-                _buildHeader(),
-                const SizedBox(height: 30),
-                _buildSearchBar(),
-                const SizedBox(height: 30),
-                _buildEventsSection(),
-                const SizedBox(height: 30),
-                _buildQuickActionsSection(),
-                const SizedBox(height: 30),
-                _buildCustomerStatsSection(),
-                const SizedBox(height: 20),
-              ],
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 30),
+              _buildEventsSection(),
+              const SizedBox(height: 30),
+              _buildQuickActionsSection(),
+              const SizedBox(height: 30),
+              _buildCustomerStatsSection(),
+              const SizedBox(height: 20),
+            ],
           ),
         ),
       ),
@@ -148,72 +210,14 @@ class _DashboardpageState extends State<Dashboardpage> {
     );
   }
 
-  Widget _buildHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Hello,',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w400,
-                color: Color(0xFF6B7280),
-              ),
-            ),
-            Text(
-              'Company Name',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.black.withOpacity(0.85),
-              ),
-            ),
-          ],
-        ),
-        const CircleAvatar(
-          radius: 25,
-          backgroundColor: Colors.grey, // Placeholder for an image
-          child: Icon(Icons.person, color: Colors.white),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSearchBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Row(
-        children: [
-          Icon(Icons.search, color: Color(0xFF9CA3AF)),
-          SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Search for customers',
-                hintStyle: TextStyle(color: Color(0xFF9CA3AF)),
-                border: InputBorder.none,
-                isDense: true,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // ---------------- UI Widgets ----------------
 
   Widget _buildEventsSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Today\'s Events',
+          "Today's Events",
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
@@ -226,7 +230,7 @@ class _DashboardpageState extends State<Dashboardpage> {
           children: [
             Expanded(
               child: _buildEventCard(
-                'Today\'s Birthday',
+                " Birthday",
                 '$_birthdayCount',
                 Icons.cake,
                 const Color(0xFFFCE1C2),
@@ -236,11 +240,11 @@ class _DashboardpageState extends State<Dashboardpage> {
             const SizedBox(width: 20),
             Expanded(
               child: _buildEventCard(
-                'Total Customers',
-                '$_customerCount',
-                Icons.groups,
-                const Color(0xFFC2D9FC),
-                () => _navigateToCustomerScreen(),
+                "Day Events",
+                '$_birthdayCount', // placeholder for now
+                Icons.event,
+                const Color.fromARGB(255, 230, 255, 161),
+                () => _navigateTodayEventsPage(),
               ),
             ),
           ],
@@ -250,11 +254,16 @@ class _DashboardpageState extends State<Dashboardpage> {
   }
 
   Widget _buildEventCard(
-      String title, String count, IconData icon, Color color, VoidCallback onTap) {
+    String title,
+    String count,
+    IconData icon,
+    Color color,
+    VoidCallback onTap,
+  ) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        height: 150, // Set a fixed height
+        height: 150,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: color,
@@ -271,12 +280,7 @@ class _DashboardpageState extends State<Dashboardpage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Icon(
-              icon,
-              size: 40,
-              color: kPrimaryBlue,
-            ),
-            const SizedBox(height: 8),
+            Icon(icon, size: 40, color: kPrimaryBlue),
             Text(
               count,
               style: const TextStyle(
@@ -457,7 +461,6 @@ class _DashboardpageState extends State<Dashboardpage> {
   Widget _buildNavBarItem(IconData icon, String label, bool isSelected) {
     return InkWell(
       onTap: () {
-        // Implement navigation logic here
         if (label == 'Customers') {
           _navigateToCustomerScreen();
         } else if (label == 'Add') {

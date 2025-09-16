@@ -20,6 +20,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
   final TextEditingController _searchController = TextEditingController();
 
+  final Color primaryColor = const Color(0xFF38B6E4);
+
   @override
   void initState() {
     super.initState();
@@ -82,7 +84,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('last_user', json.encode(newUser.toMap()));
 
-    final List<Map<String, dynamic>> allCustomersMap = customers.map((c) => c.toMap()).toList();
+    final List<Map<String, dynamic>> allCustomersMap =
+        customers.map((c) => c.toMap()).toList();
     prefs.setString('customers', json.encode(allCustomersMap));
   }
 
@@ -101,60 +104,43 @@ class _CustomerScreenState extends State<CustomerScreen> {
     return PreferredSize(
       preferredSize: const Size.fromHeight(120.0),
       child: AppBar(
-        backgroundColor: const Color(0xFF38B6E4),
-        elevation: 0,
         automaticallyImplyLeading: false,
-        toolbarHeight: 0,
-        flexibleSpace: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+        elevation: 0,
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF38B6E4), Color(0xFF4FD1C5)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
+        title: Column(
+          children: [
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.menu, color: Colors.white),
-                      onPressed: () {},
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.notifications_none,
-                        color: Colors.white,
-                      ),
-                      onPressed: () {},
-                    ),
-                  ],
+                IconButton(
+                  icon: const Icon(Icons.menu, color: Colors.white),
+                  onPressed: () {},
                 ),
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.arrow_back_ios,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                    const Expanded(
-                      child: Center(
-                        child: Text(
-                          'Company Name',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 20,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 48),
-                  ],
+                const Text(
+                  "Company Name",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                    color: Colors.white,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.notifications_none,
+                      color: Colors.white),
+                  onPressed: () {},
                 ),
               ],
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -164,188 +150,150 @@ class _CustomerScreenState extends State<CustomerScreen> {
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final padding = width * 0.05;
-    final searchHeight = 50.0;
-    final cardHeight = 100.0;
-    final avatarRadius = cardHeight * 0.3;
-    final borderColor = Colors.black;
-
     final isSearching = _searchController.text.isNotEmpty;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF5F9FC),
       appBar: _buildAppBar(),
       body: SafeArea(
         child: Column(
           children: [
             // Search bar
             Padding(
-              padding: EdgeInsets.symmetric(horizontal: padding, vertical: 20),
+              padding: EdgeInsets.symmetric(horizontal: padding, vertical: 15),
               child: Container(
-                height: searchHeight,
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  boxShadow: const [
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
                     BoxShadow(
-                      color: Colors.black12,
-                      offset: Offset(1, 1),
-                      blurRadius: 2,
+                      color: Colors.blueGrey.withOpacity(0.15),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
                     ),
                   ],
-                  border: Border.all(color: borderColor),
-                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: TextField(
-                          controller: _searchController,
-                          style: const TextStyle(color: Colors.black),
-                          decoration: const InputDecoration(
-                            hintText: 'Search by name or phone',
-                            hintStyle: TextStyle(color: Colors.black54),
-                            border: InputBorder.none,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Container(
-                      width: 50,
-                      height: searchHeight,
-                      decoration: BoxDecoration(
-                        border: Border(left: BorderSide(color: borderColor)),
-                      ),
-                      child: IconButton(
-                        icon: const Icon(Icons.search, color: Colors.black),
-                        onPressed: () {
-                          FocusScope.of(context).unfocus();
-                        },
-                      ),
-                    ),
-                  ],
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                    hintText: "Search by name or phone",
+                    hintStyle: const TextStyle(color: Colors.grey),
+                    border: InputBorder.none,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  ),
                 ),
               ),
             ),
-            // The rest of the content (conditional based on search)
+
+            // Customer list
             Expanded(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(horizontal: padding),
-                child: isSearching
-                    ? Column(
-                  children: filteredCustomers.map((customer) {
-                    return CustomerCard(
-                      customer: customer,
-                      avatarRadius: avatarRadius,
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => CustomerDetailPage(customer: customer),
+              child: filteredCustomers.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Icon(Icons.people_outline,
+                              size: 80, color: Colors.grey),
+                          SizedBox(height: 10),
+                          Text(
+                            "No customers found",
+                            style: TextStyle(color: Colors.grey, fontSize: 16),
                           ),
-                        );
-                      },
-                      onDocumentsTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DocumentsPage(customer: customer),
-                          ),
-                        );
-                      },
-                    );
-                  }).toList(),
-                )
-                    : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Last Enter Customer + Add button
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        ],
+                      ),
+                    )
+                  : ListView(
+                      padding: EdgeInsets.symmetric(horizontal: padding),
                       children: [
-                        Text(
-                          'Last Enter Customer',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: width * 0.045,
-                            color: borderColor,
+                        if (!isSearching) ...[
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                "Last Entered Customer",
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: width * 0.045,
+                                ),
+                              ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: primaryColor,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                onPressed: _navigateToAddUserPage,
+                                icon: const Icon(Icons.add),
+                                label: const Text("Add"),
+                              )
+                            ],
                           ),
-                        ),
-                        OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: borderColor),
-                            foregroundColor: borderColor,
+                          const SizedBox(height: 10),
+                          if (lastCustomer != null)
+                            CustomerCard(
+                              customer: lastCustomer!,
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        CustomerDetailPage(customer: lastCustomer!),
+                                  ),
+                                );
+                              },
+                              onDocumentsTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        DocumentsPage(customer: lastCustomer!),
+                                  ),
+                                );
+                              },
+                            ),
+                          const SizedBox(height: 20),
+                          Text(
+                            "All Customers",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: width * 0.045,
+                            ),
                           ),
-                          onPressed: _navigateToAddUserPage,
-                          child: const Text('Add'),
-                        ),
+                          const SizedBox(height: 10),
+                        ],
+                        ...filteredCustomers.map((customer) {
+                          if (lastCustomer != null &&
+                              customer.phone == lastCustomer!.phone) {
+                            return const SizedBox.shrink();
+                          }
+                          return CustomerCard(
+                            customer: customer,
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      CustomerDetailPage(customer: customer),
+                                ),
+                              );
+                            },
+                            onDocumentsTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      DocumentsPage(customer: customer),
+                                ),
+                              );
+                            },
+                          );
+                        }),
                       ],
                     ),
-
-                    const SizedBox(height: 10),
-
-                    if (lastCustomer != null)
-                      CustomerCard(
-                        customer: lastCustomer!,
-                        avatarRadius: avatarRadius,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => CustomerDetailPage(customer: lastCustomer!),
-                            ),
-                          );
-                        },
-                        onDocumentsTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => DocumentsPage(customer: lastCustomer!),
-                            ),
-                          );
-                        },
-                      ),
-
-                    const SizedBox(height: 20),
-
-                    Text(
-                      'All Customers',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: width * 0.045,
-                        color: borderColor,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-
-                    ...filteredCustomers.map((customer) {
-                      if (lastCustomer != null && customer.phone == lastCustomer!.phone) {
-                        return const SizedBox.shrink();
-                      }
-                      return CustomerCard(
-                        customer: customer,
-                        avatarRadius: avatarRadius,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => CustomerDetailPage(customer: customer),
-                            ),
-                          );
-                        },
-                        onDocumentsTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => DocumentsPage(customer: customer),
-                            ),
-                          );
-                        },
-                      );
-                    }),
-                  ],
-                ),
-              ),
             ),
           ],
         ),
@@ -354,132 +302,87 @@ class _CustomerScreenState extends State<CustomerScreen> {
   }
 }
 
-class CustomerCard extends StatefulWidget {
+class CustomerCard extends StatelessWidget {
   final model.Customer customer;
-  final double avatarRadius;
   final VoidCallback? onTap;
   final VoidCallback? onDocumentsTap;
 
   const CustomerCard({
     super.key,
     required this.customer,
-    required this.avatarRadius,
     this.onTap,
     this.onDocumentsTap,
   });
 
   @override
-  State<CustomerCard> createState() => _CustomerCardState();
-}
-
-class _CustomerCardState extends State<CustomerCard> with SingleTickerProviderStateMixin {
-  bool _pressed = false;
-
-  void _onTapDown(TapDownDetails details) {
-    setState(() {
-      _pressed = true;
-    });
-  }
-
-  void _onTapUp(TapUpDetails details) {
-    setState(() {
-      _pressed = false;
-    });
-  }
-
-  void _onTapCancel() {
-    setState(() {
-      _pressed = false;
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final borderColor = Colors.black;
+    final borderColor = Colors.blueGrey.shade100;
 
-    return AnimatedScale(
-      scale: _pressed ? 0.97 : 1.0,
-      duration: const Duration(milliseconds: 100),
-      curve: Curves.easeOut,
-      child: GestureDetector(
-        onTapDown: _onTapDown,
-        onTapUp: _onTapUp,
-        onTapCancel: _onTapCancel,
-        onTap: widget.onTap,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 15),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: borderColor),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                offset: const Offset(0, 4),
-                blurRadius: 8,
-                spreadRadius: 1,
-              ),
-              BoxShadow(
-                color: Colors.black.withOpacity(0.06),
-                offset: const Offset(0, 2),
-                blurRadius: 4,
-                spreadRadius: 0,
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: widget.avatarRadius,
-                backgroundColor: borderColor.withOpacity(0.1),
-                backgroundImage: widget.customer.imageBytes != null
-                    ? MemoryImage(widget.customer.imageBytes!)
-                    : null,
-                child: widget.customer.imageBytes == null
-                    ? Icon(
-                  Icons.person,
-                  size: widget.avatarRadius * 1.5,
-                  color: Colors.black,
-                )
-                    : null,
-              ),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.customer.name,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: width * 0.05,
-                        color: borderColor,
-                      ),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 15),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: borderColor),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              offset: const Offset(0, 4),
+              blurRadius: 6,
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 30,
+              backgroundColor: Colors.blue.shade50,
+              backgroundImage: customer.imageBytes != null
+                  ? MemoryImage(customer.imageBytes!)
+                  : null,
+              child: customer.imageBytes == null
+                  ? const Icon(Icons.person, size: 30, color: Colors.blueGrey)
+                  : null,
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    customer.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                      color: Colors.black87,
                     ),
-                    Divider(color: borderColor),
-                    Text(
-                      widget.customer.phone,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: width * 0.045,
-                        color: borderColor.withOpacity(0.7),
-                      ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    customer.phone,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.grey.shade700,
                     ),
-                  ],
+                  ),
+                ],
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF38B6E4),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: borderColor),
-                  foregroundColor: borderColor,
-                ),
-                onPressed: widget.onDocumentsTap,
-                child: const Text('Documents'),
-              ),
-            ],
-          ),
+              onPressed: onDocumentsTap,
+              child: const Text("Docs"),
+            ),
+          ],
         ),
       ),
     );

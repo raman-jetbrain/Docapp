@@ -1,32 +1,12 @@
 import 'dart:typed_data';
+import 'package:docapp/model/customermodel.dart';
 import 'package:docapp/model/description.dart';
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
-// Customer model
-class Customer {
-  final String name;
-  final String phone;
-  final Uint8List? imageBytes;
 
-  Customer({
-    required this.name,
-    required this.phone,
-    this.imageBytes,
-  });
-
-  factory Customer.fromMap(Map<String, dynamic> map) {
-    return Customer(
-      name: map['name'],
-      phone: map['phone'],
-      imageBytes: map['imageBytes'] != null
-          ? Uint8List.fromList(List<int>.from(map['imageBytes']))
-          : null,
-    );
-  }
-}
 
 
 class DescriptionPage extends StatefulWidget {
