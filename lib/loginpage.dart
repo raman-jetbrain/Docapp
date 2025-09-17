@@ -50,7 +50,7 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      final baseUrl = await ApiConstants.baseUrl;
+      final baseUrl = ApiConstants.baseUrl;
       final url = Uri.parse("$baseUrl/api/Auth/LoginV2");
       final requestBody = {
         "MobileNumber": phone,

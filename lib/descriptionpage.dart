@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:docapp/model/customermodel.dart';
 import 'package:docapp/model/description.dart';
 import 'package:flutter/material.dart';

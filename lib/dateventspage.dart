@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:docapp/services/api_service.dart';
+import 'package:docapp/postereditpage.dart';
 
 class DayEventsPage extends StatefulWidget {
   const DayEventsPage({super.key});
@@ -10,181 +10,133 @@ class DayEventsPage extends StatefulWidget {
 }
 
 class _DayEventsPageState extends State<DayEventsPage> {
-  List<Map<String, dynamic>> _todayCustomers = [];
+  final List<String> dailyEvents = [
+    'Halloween Party',
+    'Concert Night',
+    'Bible Study Group',
+    'Comedy Show',
+  ];
 
-  @override
-  void initState() {
-    super.initState();
-    _loadTodayCustomers();
-  }
+  bool _showPosterGrid = false;
+  bool _loading = false;
+  final ApiService api = ApiService();
+  List<String> posterUrls = [];
 
-  Future<void> _loadTodayCustomers() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? customersJson = prefs.getString('customers');
+  Future<void> fetchPosters() async {
+    setState(() => _loading = true);
 
-    if (customersJson != null) {
-      final List<dynamic> customersList = json.decode(customersJson);
-
-      final now = DateTime.now();
-      final todayDay = now.day;
-      final todayMonth = now.month;
-
-      List<Map<String, dynamic>> matchedCustomers = [];
-
-      for (var customer in customersList) {
-        final dobString = customer['dob'] as String? ?? '';
-        if (dobString.isNotEmpty) {
-          try {
-            final parts = dobString.split('/');
-            if (parts.length >= 2) {
-              final day = int.parse(parts[0]);
-              final month = int.parse(parts[1]);
-              if (day == todayDay && month == todayMonth) {
-                matchedCustomers.add(Map<String, dynamic>.from(customer));
-              }
-            }
-          } catch (_) {
-            // ignore parse errors
-          }
-        }
+    posterUrls.clear();
+    for (var event in dailyEvents) {
+      final url = await api.generatePoster(
+        "YOUR_TEMPLATE_ID", // replace with your actual template ID
+        event,
+      );
+      if (url != null) {
+        posterUrls.add(url);
       }
-
-      setState(() {
-        _todayCustomers = matchedCustomers;
-      });
-    } else {
-      setState(() {
-        _todayCustomers = [];
-      });
     }
+
+    setState(() => _loading = false);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF38B6E4),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'Company Name',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none),
-            onPressed: () {},
-          ),
-        ],
+        title: const Text("September 16, 2025 Events"),
       ),
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      body: SingleChildScrollView(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Day Events of Customers',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-                color: Colors.grey,
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text(
+                "Today's Events",
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
             ),
-            const SizedBox(height: 8),
-            const Divider(thickness: 1),
-            const SizedBox(height: 12),
-            Expanded(
-              child: _todayCustomers.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No customers with birthdays today.',
-                        style: TextStyle(color: Colors.grey),
+
+            // Event List
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: dailyEvents.length,
+              itemBuilder: (context, index) {
+                return ListTile(
+                  title: Text(dailyEvents[index]),
+                  subtitle: const Text("6:00 PM - 8:00 PM"),
+                );
+              },
+            ),
+            const Divider(),
+
+            // Poster section
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    "Create a Poster",
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      _showPosterGrid ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _showPosterGrid = !_showPosterGrid;
+                        if (_showPosterGrid) fetchPosters();
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            if (_showPosterGrid)
+              _loading
+                  ? const CircularProgressIndicator()
+                  : GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                        childAspectRatio: 0.6,
                       ),
-                    )
-                  : ListView.builder(
-                      itemCount: _todayCustomers.length,
+                      itemCount: posterUrls.length,
                       itemBuilder: (context, index) {
-                        final customer = _todayCustomers[index];
-                        return _buildCustomerCard(
-                          name: customer['name'] ?? '',
-                          phone: customer['phone'] ?? '',
+                        final url = posterUrls[index];
+                        return GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => PosterEditScreen(
+                                  posterTemplatePath: url,
+                                  eventName: dailyEvents[index],
+                                ),
+                              ),
+                            );
+                          },
+                          child: Card(
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(url, fit: BoxFit.cover),
+                            ),
+                          ),
                         );
                       },
                     ),
-            ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildCustomerCard({required String name, required String phone}) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 6,
-            offset: Offset(2, 2),
-          ),
-        ],
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Row(
-        children: [
-          // Circular avatar placeholder
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.person,
-              size: 30,
-              color: Colors.white70,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Container(
-                  height: 1,
-                  color: Colors.grey.shade300,
-                  margin: const EdgeInsets.only(right: 100),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  phone,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

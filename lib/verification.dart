@@ -56,7 +56,7 @@ class _VerificationPageState extends State<VerificationPage> {
         return;
       }
 
-      final baseUrl = await ApiConstants.baseUrl;
+      final baseUrl = ApiConstants.baseUrl;
 
       final payload = {
         "otp": otp,

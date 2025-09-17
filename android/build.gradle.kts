@@ -14,8 +14,8 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
-}
-
-tasks.register<Delete>("clean") {
+// Do not force evaluation of the ':app' project here — forcing evaluation can cause plugins
+// to be applied twice and lead to the "Plugin with id 'com.android.application' was already requested" error.
+// If you need ordering or task wiring, express it via task dependencies or lazy configuration instead.
     delete(rootProject.layout.buildDirectory)
 }

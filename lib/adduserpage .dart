@@ -14,14 +14,13 @@ class AddNewUserPage extends StatefulWidget {
 
 class _AddNewUserPageState extends State<AddNewUserPage> {
   static const Color kPrimaryBlue = Color(0xFF38B6E4);
-  static const double kScreenPadding = 20;
-  static const double kRadius = 16;
+  static const double kScreenPadding = 18;
 
   File? _imageFile;
   final ImagePicker _picker = ImagePicker();
 
-  // Controllers
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _surnameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
@@ -35,6 +34,17 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
   void initState() {
     super.initState();
     _loadCustomEntries();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _surnameController.dispose();
+    _phoneController.dispose();
+    _addressController.dispose();
+    _emailController.dispose();
+    _dobController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCustomEntries() async {
@@ -79,44 +89,9 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(
-        fontWeight: FontWeight.w600,
-        color: Colors.black54,
-      ),
-      filled: true,
-      fillColor: Colors.grey.shade50,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(kRadius),
-        borderSide: const BorderSide(color: Colors.black26),
-      ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar() {
-    return AppBar(
-      backgroundColor: kPrimaryBlue,
-      elevation: 0,
-      centerTitle: true,
-      title: const Text(
-        "Add New User",
-        style: TextStyle(fontWeight: FontWeight.bold),
-      ),
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-        onPressed: () => Navigator.of(context).pop(),
-      ),
-      actions: [
-        Padding(
-          padding: const EdgeInsets.only(right: 12.0),
-          child: Image.asset(
-            "assets/images/mic-logo.jpeg", // ✅ no leading slash
-            height: 35,
-            width: 35,
-            fit: BoxFit.contain,
-          ),
-        ),
-      ],
+      labelStyle: const TextStyle(color: Colors.grey, fontSize: 16),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 14),
+      border: InputBorder.none,
     );
   }
 
@@ -164,6 +139,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     final newCustomerMap = {
       "image": bytes != null ? base64Encode(bytes) : "",
       "name": _nameController.text.trim(),
+      "surname": _surnameController.text.trim(),
       "phone": _phoneController.text.trim(),
       "address": _addressController.text.trim(),
       "email": _emailController.text.trim(),
@@ -180,143 +156,176 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     await prefs.setString('customers', json.encode(list));
     await prefs.setString('last_user', json.encode(newCustomerMap));
 
-    Navigator.pop(context, Customer(
-      name: _nameController.text.trim(),
-      phone: _phoneController.text.trim(),
-      email: _emailController.text.trim(),
-      imageBytes: bytes,
-    ));
+    Navigator.pop(
+      context,
+      Customer(
+        name: newCustomerMap['name'] as String,
+        surname: newCustomerMap['surname'] as String,
+        phone: _phoneController.text.trim(),
+        email: _emailController.text.trim(),
+        address: _addressController.text.trim(),
+        dob: _dobController.text.trim(),
+        gender: _gender ?? "",
+        customEntries: _customEntries,
+        imageBytes: bytes,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(),
-      backgroundColor: Colors.grey.shade100,
-      body: ListView(
-        padding: const EdgeInsets.all(kScreenPadding),
-        children: [
-          // Profile Image
-          Center(
-            child: GestureDetector(
-              onTap: _pickImage,
-              child: CircleAvatar(
-                radius: 60,
-                backgroundColor: Colors.grey.shade200,
-                backgroundImage: _imageFile != null ? FileImage(_imageFile!) : null,
-                child: _imageFile == null
-                    ? const Icon(Icons.camera_alt, size: 40, color: Colors.black54)
-                    : null,
-              ),
+      backgroundColor: Colors.white,
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            expandedHeight: 60,
+            pinned: true,
+            backgroundColor: Colors.transparent,
+            leading: const BackButton(color: Colors.white),
+            title: const Text(
+              "Add New Customer",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
-          ),
-          const SizedBox(height: 20),
-
-          // Personal Info
-          Card(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(kRadius)),
-            elevation: 3,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  TextField(controller: _nameController, decoration: _inputDecoration("Name")),
-                  const SizedBox(height: 16),
-                  TextField(controller: _phoneController, decoration: _inputDecoration("Phone No"), keyboardType: TextInputType.phone),
-                  const SizedBox(height: 16),
-                  TextField(controller: _addressController, decoration: _inputDecoration("Address"), maxLines: 2),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _dobController,
-                    readOnly: true,
-                    onTap: _pickDate,
-                    decoration: _inputDecoration("Date of Birth").copyWith(
-                      suffixIcon: const Icon(Icons.calendar_today),
+            centerTitle: true,
+            flexibleSpace: FlexibleSpaceBar(
+              background: Container(
+                decoration: const BoxDecoration(
+                  image: DecorationImage(
+                    image: AssetImage("assets/images/Background2.jpeg"),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: kScreenPadding),
+                  child: Align(
+                    alignment: Alignment.bottomRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.asset("assets/images/logo2.png", height: 40, width: 60),
+                      ),
                     ),
                   ),
-                ],
+                ),
               ),
             ),
           ),
+          SliverList(
+            delegate: SliverChildListDelegate([
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                child: Column(
+                  children: [
+                    Center(
+                      child: GestureDetector(
+                        onTap: _pickImage,
+                        child: CircleAvatar(
+                          radius: 60,
+                          backgroundColor: Colors.grey.shade200,
+                          backgroundImage: _imageFile != null ? FileImage(_imageFile!) : null,
+                          child: _imageFile == null ? const Icon(Icons.person, size: 40, color: Colors.grey) : null,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                    TextField(controller: _nameController, decoration: _inputDecoration("Name")),
+                    const Divider(color: Colors.black12),
+                    TextField(controller: _surnameController, decoration: _inputDecoration("Surname")),
+                    const Divider(color: Colors.black12),
+                    TextField(
+                      controller: _dobController,
+                      readOnly: true,
+                      onTap: _pickDate,
+                      decoration: _inputDecoration("Date of Birth").copyWith(
+                        suffixIcon: const Icon(Icons.keyboard_arrow_down, color: Colors.black54),
+                      ),
+                    ),
+                    const Divider(color: Colors.black12),
+                    TextField(controller: _emailController, decoration: _inputDecoration("Email")),
+                    const Divider(color: Colors.black12),
+                    TextField(controller: _phoneController, decoration: _inputDecoration("Phone No")),
+                    const Divider(color: Colors.black12),
+                    TextField(controller: _addressController, decoration: _inputDecoration("Address")),
+                    const Divider(color: Colors.black12),
+                    const SizedBox(height: 20),
 
-          const SizedBox(height: 20),
-
-          // Gender Selection
-          Card(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(kRadius)),
-            elevation: 3,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  const Text("Gender:", style: TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    child: Wrap(
-                      spacing: 20,
+                    // Gender selection
+                    const Text("Gender", style: TextStyle(color: Colors.grey)),
+                    Row(
                       children: ["Male", "Female", "Other"].map((g) {
-                        return Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Radio<String>(
-                              value: g,
-                              groupValue: _gender,
-                              onChanged: (val) => setState(() => _gender = val),
-                            ),
-                            Text(g),
-                          ],
+                        return Expanded(
+                          child: Row(
+                            children: [
+                              Radio<String>(
+                                value: g,
+                                groupValue: _gender,
+                                onChanged: (val) => setState(() => _gender = val),
+                                activeColor: Colors.black87,
+                              ),
+                              Text(g),
+                            ],
+                          ),
                         );
                       }).toList(),
                     ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 20),
-
-          // Custom Entries
-          ElevatedButton.icon(
-            onPressed: _showAddCustomEntryDialog,
-            icon: const Icon(Icons.add),
-            label: const Text("Add Custom Entry"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kPrimaryBlue,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (_customEntries.isNotEmpty)
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _customEntries.map((entry) {
-                return Chip(
-                  label: Text("${entry['type']}: ${entry['detail']}"),
-                  backgroundColor: Colors.grey.shade200,
-                  deleteIcon: const Icon(Icons.close, size: 18),
-                  onDeleted: () async {
-                    setState(() => _customEntries.remove(entry));
-                    await _saveCustomEntries();
-                  },
-                );
-              }).toList(),
-            ),
+                    const Divider(color: Colors.black12),
+                    ElevatedButton.icon(
+                      onPressed: _showAddCustomEntryDialog,
+                      icon: const Icon(Icons.add, color: kPrimaryBlue),
+                      label: const Text("Add Custom Entry", style: TextStyle(color: kPrimaryBlue)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        elevation: 0,
+                        side: const BorderSide(color: kPrimaryBlue),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    if (_customEntries.isNotEmpty)
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: _customEntries.map((entry) {
+                          return Chip(
+                            label: Text("${entry['type']}: ${entry['detail']}"),
+                            backgroundColor: Colors.grey.shade200,
+                            deleteIcon: const Icon(Icons.close, size: 18),
+                            onDeleted: () async {
+                              setState(() => _customEntries.remove(entry));
+                              await _saveCustomEntries();
+                            },
+                          );
+                        }).toList(),
+                      ),
+                  ],
+                ),
+              )
+            ]),
+          )
         ],
       ),
-
-      // Submit Button
       bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.all(16),
-        child: ElevatedButton(
-          onPressed: _submit,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: kPrimaryBlue,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        minimum: const EdgeInsets.all(kScreenPadding),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            image: const DecorationImage(
+              image: AssetImage("assets/images/Background2.jpeg"),
+              fit: BoxFit.cover,
+            ),
           ),
-          child: const Text("Submit", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          child: ElevatedButton(
+            onPressed: _submit,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.transparent,
+              shadowColor: Colors.transparent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            child: const Text("Submit",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+          ),
         ),
       ),
     );

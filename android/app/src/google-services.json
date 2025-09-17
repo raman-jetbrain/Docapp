@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1090363900822",
+    "project_id": "docapp-d7a4a",
+    "storage_bucket": "docapp-d7a4a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1090363900822:android:0b54b85d3acfda72f6d3b7",
+        "android_client_info": {
+          "package_name": "com.Venusoftwares.docapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC24O9p8kZbTXDWhpnvRPkY0wS_BKbvxq0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -11,6 +11,7 @@ void main() {
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -19,7 +20,9 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         fontFamily: 'Montserrat',
         primaryColor: const Color(0xFF3B5998),
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3B5998)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF3B5998),
+        ),
       ),
       home: const Dashboardpage(),
     );
@@ -118,6 +121,7 @@ class _DashboardpageState extends State<Dashboardpage> {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
+
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(120),
         child: AppBar(
@@ -136,39 +140,30 @@ class _DashboardpageState extends State<Dashboardpage> {
                   ),
                 ),
               ),
-              // Title Section
               SafeArea(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      const Text(
-                        '',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w400,
-                          color: Color.fromARGB(255, 214, 212, 212),
-                        ),
-                      ),
-                      const SizedBox(height: 1),
                       Row(
-                        crossAxisAlignment: CrossAxisAlignment.center, // Aligns children vertically
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(8), // rounded logo
+                            borderRadius: BorderRadius.circular(8),
                             child: Image.asset(
                               "assets/images/logo2.png",
-                              height: 40,
-                              width: 70,
+                              height: 60,
+                              width: 90,
                               fit: BoxFit.cover,
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 15),
                           const Expanded(
                             child: Text(
-                              'Maruthi Insurance care ,',
+                              'Maruthi \nInsurance care,',
                               style: TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.bold,
@@ -241,7 +236,7 @@ class _DashboardpageState extends State<Dashboardpage> {
             Expanded(
               child: _buildEventCard(
                 "Day Events",
-                '$_birthdayCount', // placeholder for now
+                '$_birthdayCount', // placeholder
                 Icons.event,
                 const Color.fromARGB(255, 230, 255, 161),
                 () => _navigateTodayEventsPage(),
@@ -431,34 +426,46 @@ class _DashboardpageState extends State<Dashboardpage> {
     );
   }
 
+  // ---------------- Responsive Floating Nav Bar ----------------
   Widget _buildBottomNavigationBar() {
-    return Container(
-      height: 70,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 20,
-            offset: const Offset(0, -5),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildNavBarItem(Icons.home, 'Home', true),
-          _buildNavBarItem(Icons.group, 'Customers', false),
-          _buildNavBarItem(Icons.add_circle, 'Add', false),
-          _buildNavBarItem(Icons.notifications, 'Events', false),
-          _buildNavBarItem(Icons.person, 'Profile', false),
-        ],
+    final screenWidth = MediaQuery.of(context).size.width;
+    final navHeight = screenWidth * 0.18; // responsive height (~65–80px)
+
+    return SafeArea(
+      minimum: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        height: navHeight,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 25,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildNavBarItem(Icons.home, 'Home', true),
+            _buildNavBarItem(Icons.group, 'Customers', false),
+            _buildNavBarItem(Icons.add_circle, 'Add', false),
+            _buildNavBarItem(Icons.notifications, 'Events', false),
+            _buildNavBarItem(Icons.person, 'Profile', false),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildNavBarItem(IconData icon, String label, bool isSelected) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final iconSize = screenWidth * 0.07; // responsive icon (~26-32px)
+    final fontSize = screenWidth * 0.03; // responsive text (~12px)
+
     return InkWell(
       onTap: () {
         if (label == 'Customers') {
@@ -475,13 +482,13 @@ class _DashboardpageState extends State<Dashboardpage> {
           Icon(
             icon,
             color: isSelected ? kPrimaryBlue : Colors.grey[400],
-            size: 28,
+            size: iconSize,
           ),
           const SizedBox(height: 4),
           Text(
             label,
             style: TextStyle(
-              fontSize: 12,
+              fontSize: fontSize,
               color: isSelected ? kPrimaryBlue : Colors.grey[400],
               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             ),

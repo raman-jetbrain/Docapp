@@ -43,9 +43,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
             _savedNotes = (customerData['notes'] ?? '').toString();
           });
         }
-      } catch (_) {
-        // Ignore malformed JSON or unexpected structure
-      }
+      } catch (_) {}
     }
   }
 
@@ -58,7 +56,6 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     if (customersJson != null && customersJson.isNotEmpty) {
       try {
         customersList = jsonDecode(customersJson);
-        if (customersList is! List) customersList = [];
       } catch (_) {
         customersList = [];
       }
@@ -70,6 +67,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     } else {
       customersList.add({
         'name': widget.customer.name,
+        'surname': widget.customer.surname,
         'phone': widget.customer.phone,
         'notes': note,
       });
@@ -108,7 +106,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverAppBar(
-            expandedHeight: 250, // Height for the image and content
+            expandedHeight: 250,
             pinned: true,
             backgroundColor: primaryColor,
             leading: Container(
@@ -146,8 +144,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                           fit: BoxFit.cover,
                         )
                       : Container(
-                          color: primaryColor.withOpacity(0.8), // Placeholder background color
-                          child: Icon(Icons.person, size: 120, color: Colors.white.withOpacity(0.6)), // Placeholder icon
+                          color: primaryColor.withOpacity(0.8),
+                          child: Icon(Icons.person, size: 120, color: Colors.white.withOpacity(0.6)),
                         ),
                   // Gradient Overlay
                   Container(
@@ -159,18 +157,18 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                           Colors.black.withOpacity(0.4),
                           Colors.transparent,
                           Colors.transparent,
-                          Colors.black.withOpacity(0.6), // Stronger gradient at the bottom
+                          Colors.black.withOpacity(0.6),
                         ],
                         stops: const [0.0, 0.5, 0.7, 1.0],
                       ),
                     ),
                   ),
-                  // Customer Name and Phone Number
+                  // 👉 Customer Name, Surname and Phone Number
                   Positioned(
-                    bottom: 20, // Adjust position as needed
-                    left: 24, // Align to the left
+                    bottom: 20,
+                    left: 24,
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start, // Align text to the start
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           widget.customer.name,
@@ -180,14 +178,32 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             color: Colors.white,
                             shadows: [
                               Shadow(
-                                color: Color.fromARGB(255, 0, 0, 0),
+                                color: Colors.black,
                                 blurRadius: 2.0,
                                 offset: Offset(1, 1),
                               ),
                             ],
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        if (widget.customer.surname.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            widget.customer.surname,
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white70,
+                              shadows: [
+                                Shadow(
+                                  color: Colors.black,
+                                  blurRadius: 2.0,
+                                  offset: Offset(1, 1),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 6),
                         Text(
                           widget.customer.phone,
                           style: TextStyle(
@@ -196,7 +212,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             color: Colors.white.withOpacity(0.9),
                             shadows: const [
                               Shadow(
-                                color: Color.fromARGB(255, 0, 0, 0),
+                                color: Colors.black,
                                 blurRadius: 2.0,
                                 offset: Offset(1, 1),
                               ),
@@ -210,10 +226,11 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
               ),
             ),
           ),
+
+          // 👉 Body content
           SliverList(
             delegate: SliverChildListDelegate(
               [
-                // The white content card starts here
                 Container(
                   width: double.infinity,
                   decoration: const BoxDecoration(
@@ -228,17 +245,13 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Description section with icon
                         _buildSectionCard(
                           title: 'Description',
                           icon: Icons.info_outline,
                           iconColor: primaryColor,
-                          onTap: () {
-                            // TODO: Implement description page navigation
-                          },
+                          onTap: () {},
                         ),
                         const SizedBox(height: 16),
-                        // Documents section
                         _buildSectionCard(
                           title: 'Documents',
                           icon: Icons.description_outlined,
@@ -253,17 +266,13 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                           },
                         ),
                         const SizedBox(height: 16),
-                        // Family section
                         _buildSectionCard(
                           title: 'Family',
                           icon: Icons.family_restroom_outlined,
                           iconColor: primaryColor,
-                          onTap: () {
-                            // TODO: Implement family page navigation
-                          },
+                          onTap: () {},
                         ),
                         const SizedBox(height: 32),
-                        // Notes section header
                         const Padding(
                           padding: EdgeInsets.only(bottom: 8.0),
                           child: Text(
@@ -275,12 +284,9 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             ),
                           ),
                         ),
-                        // Notes Card
                         GestureDetector(
                           onTap: _openNotesEditor,
-                          child: NotesCard(
-                            notes: _savedNotes,
-                          ),
+                          child: NotesCard(notes: _savedNotes),
                         ),
                         const SizedBox(height: 20),
                       ],
@@ -343,6 +349,10 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
   }
 }
 
+extension on model.Customer {
+  Null get surname => null;
+}
+
 class NotesCard extends StatelessWidget {
   final String notes;
   const NotesCard({super.key, required this.notes});
@@ -374,10 +384,7 @@ class NotesCard extends StatelessWidget {
             : SingleChildScrollView(
                 child: Text(
                   notes,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    color: Colors.black87,
-                  ),
+                  style: const TextStyle(fontSize: 16, color: Colors.black87),
                 ),
               ),
       ),
@@ -390,7 +397,6 @@ class _NotesEditorCard extends StatefulWidget {
   final VoidCallback onSave;
 
   const _NotesEditorCard({
-    super.key,
     required this.controller,
     required this.onSave,
   });
@@ -440,11 +446,7 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
           children: [
             const Text(
               'Edit Notes',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 22,
-                color: Colors.black87,
-              ),
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 22, color: Colors.black87),
             ),
             const SizedBox(height: 16),
             Expanded(
@@ -462,10 +464,7 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
                     borderRadius: BorderRadius.circular(16),
                     borderSide: BorderSide.none,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 14,
-                  ),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                 ),
                 style: const TextStyle(fontSize: 16),
               ),
@@ -473,33 +472,19 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
             const SizedBox(height: 16),
             Row(
               children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
+                TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
                 const Spacer(),
                 if (widget.controller.text.isNotEmpty)
-                  TextButton(
-                    onPressed: () => widget.controller.clear(),
-                    child: const Text('Clear'),
-                  ),
+                  TextButton(onPressed: () => widget.controller.clear(), child: const Text('Clear')),
                 const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: _changed ? widget.onSave : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF38B6E4),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 12,
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   ),
-                  child: const Text(
-                    'Save',
-                    style: TextStyle(fontSize: 16, color: Colors.white),
-                  ),
+                  child: const Text('Save', style: TextStyle(fontSize: 16, color: Colors.white)),
                 ),
               ],
             ),
