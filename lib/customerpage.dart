@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'package:docapp/adduserpage%20.dart';
+import 'package:docapp/dashboardpage.dart';
 import 'package:docapp/model/customermodel.dart' as model;
 import 'package:flutter/material.dart';
 import 'package:docapp/customerdetailpage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:docapp/dateventspage.dart';
 
 class CustomerScreen extends StatefulWidget {
   const CustomerScreen({super.key});
@@ -17,8 +19,9 @@ class _CustomerScreenState extends State<CustomerScreen> {
   model.Customer? lastCustomer;
   final List<model.Customer> customers = [];
   List<model.Customer> filteredCustomers = [];
-
   final TextEditingController _searchController = TextEditingController();
+
+  static const Color kPrimaryBlue = Color(0xFF38B6E4);
 
   @override
   void initState() {
@@ -47,7 +50,6 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
   Future<void> _loadCustomers() async {
     customers.clear();
-
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('customers');
 
@@ -57,7 +59,6 @@ class _CustomerScreenState extends State<CustomerScreen> {
         list.map((e) => model.Customer.fromMap(Map<String, dynamic>.from(e))),
       );
     }
-
     _filterCustomers();
   }
 
@@ -66,8 +67,9 @@ class _CustomerScreenState extends State<CustomerScreen> {
     setState(() {
       filteredCustomers = customers.where((customer) {
         final nameMatch = customer.name.toLowerCase().contains(query);
+        final surnameMatch = customer.surname.toLowerCase().contains(query);
         final phoneMatch = customer.phone.toLowerCase().contains(query);
-        return nameMatch || phoneMatch;
+        return nameMatch || surnameMatch || phoneMatch;
       }).toList();
     });
   }
@@ -82,7 +84,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('last_user', json.encode(newUser.toMap()));
 
-    final List<Map<String, dynamic>> allCustomersMap = customers.map((c) => c.toMap()).toList();
+    final List<Map<String, dynamic>> allCustomersMap =
+        customers.map((c) => c.toMap()).toList();
     prefs.setString('customers', json.encode(allCustomersMap));
   }
 
@@ -91,72 +94,22 @@ class _CustomerScreenState extends State<CustomerScreen> {
       context,
       MaterialPageRoute(builder: (context) => const AddNewUserPage()),
     );
-
     if (newUser != null) {
       _addNewUser(newUser);
     }
   }
 
-  PreferredSizeWidget _buildAppBar() {
-    return PreferredSize(
-      preferredSize: const Size.fromHeight(120.0),
-      child: AppBar(
-        backgroundColor: const Color(0xFF38B6E4),
-        elevation: 0,
-        automaticallyImplyLeading: false,
-        toolbarHeight: 0,
-        flexibleSpace: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.menu, color: Colors.white),
-                      onPressed: () {},
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.notifications_none,
-                        color: Colors.white,
-                      ),
-                      onPressed: () {},
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.arrow_back_ios,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                    const Expanded(
-                      child: Center(
-                        child: Text(
-                          'Company Name',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 20,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 48),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+  void _navigateToDashboard() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const Dashboardpage()),
+    );
+  }
+
+  void _navigateToEvents() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const DayEventsPage()),
     );
   }
 
@@ -164,322 +117,344 @@ class _CustomerScreenState extends State<CustomerScreen> {
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final padding = width * 0.05;
-    final searchHeight = 50.0;
-    final cardHeight = 100.0;
-    final avatarRadius = cardHeight * 0.3;
-    final borderColor = Colors.black;
-
     final isSearching = _searchController.text.isNotEmpty;
 
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: _buildAppBar(),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Search bar
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: padding, vertical: 20),
-              child: Container(
-                height: searchHeight,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black12,
-                      offset: Offset(1, 1),
-                      blurRadius: 2,
-                    ),
-                  ],
-                  border: Border.all(color: borderColor),
-                  borderRadius: BorderRadius.circular(12),
+      backgroundColor: const Color(0xFFF5F9FC),
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            expandedHeight: 70,
+            pinned: true,
+            backgroundColor: Colors.transparent,
+            leading: const BackButton(color: Colors.white), // ✅ White back arrow
+            centerTitle: true,
+            title: const Text(
+              "Customers",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                shadows: [
+                  Shadow(
+                    blurRadius: 6,
+                    color: Colors.black54,
+                    offset: Offset(1, 1),
+                  ),
+                ],
+              ),
+            ),
+            flexibleSpace: FlexibleSpaceBar(
+              background: Container(
+                decoration: const BoxDecoration(
+                  image: DecorationImage(
+                    image: AssetImage("assets/images/Background2.jpeg"),
+                    fit: BoxFit.cover,
+                  ),
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: TextField(
-                          controller: _searchController,
-                          style: const TextStyle(color: Colors.black),
-                          decoration: const InputDecoration(
-                            hintText: 'Search by name or phone',
-                            hintStyle: TextStyle(color: Colors.black54),
-                            border: InputBorder.none,
-                          ),
+                child: SafeArea(
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 16, top: 8),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.asset(
+                          "assets/images/logo2.png",
+                          height: 40,
+                          width: 60,
+                          fit: BoxFit.cover,
                         ),
                       ),
                     ),
-                    Container(
-                      width: 50,
-                      height: searchHeight,
-                      decoration: BoxDecoration(
-                        border: Border(left: BorderSide(color: borderColor)),
-                      ),
-                      child: IconButton(
-                        icon: const Icon(Icons.search, color: Colors.black),
-                        onPressed: () {
-                          FocusScope.of(context).unfocus();
-                        },
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
-            // The rest of the content (conditional based on search)
-            Expanded(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(horizontal: padding),
-                child: isSearching
-                    ? Column(
-                  children: filteredCustomers.map((customer) {
-                    return CustomerCard(
-                      customer: customer,
-                      avatarRadius: avatarRadius,
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => CustomerDetailPage(customer: customer),
-                          ),
-                        );
-                      },
-                      onDocumentsTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DocumentsPage(customer: customer),
-                          ),
-                        );
-                      },
-                    );
-                  }).toList(),
-                )
-                    : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Last Enter Customer + Add button
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Last Enter Customer',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: width * 0.045,
-                            color: borderColor,
-                          ),
-                        ),
-                        OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: borderColor),
-                            foregroundColor: borderColor,
-                          ),
-                          onPressed: _navigateToAddUserPage,
-                          child: const Text('Add'),
+          ),
+
+          // 🔹 Main content
+          SliverFillRemaining(
+            child: Column(
+              children: [
+                // Search bar
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: padding, vertical: 15),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.blueGrey.withOpacity(0.15),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
                         ),
                       ],
                     ),
-
-                    const SizedBox(height: 10),
-
-                    if (lastCustomer != null)
-                      CustomerCard(
-                        customer: lastCustomer!,
-                        avatarRadius: avatarRadius,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => CustomerDetailPage(customer: lastCustomer!),
-                            ),
-                          );
-                        },
-                        onDocumentsTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => DocumentsPage(customer: lastCustomer!),
-                            ),
-                          );
-                        },
-                      ),
-
-                    const SizedBox(height: 20),
-
-                    Text(
-                      'All Customers',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: width * 0.045,
-                        color: borderColor,
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search, color: Colors.grey),
+                        hintText: "Search by name, surname or phone",
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                       ),
                     ),
-                    const SizedBox(height: 10),
-
-                    ...filteredCustomers.map((customer) {
-                      if (lastCustomer != null && customer.phone == lastCustomer!.phone) {
-                        return const SizedBox.shrink();
-                      }
-                      return CustomerCard(
-                        customer: customer,
-                        avatarRadius: avatarRadius,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => CustomerDetailPage(customer: customer),
-                            ),
-                          );
-                        },
-                        onDocumentsTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => DocumentsPage(customer: customer),
-                            ),
-                          );
-                        },
-                      );
-                    }),
-                  ],
+                  ),
                 ),
-              ),
+
+                // Customers list
+                Expanded(
+                  child: filteredCustomers.isEmpty
+                      ? const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.people_outline, size: 80, color: Colors.grey),
+                              SizedBox(height: 10),
+                              Text("No customers found",
+                                  style: TextStyle(color: Colors.grey, fontSize: 16)),
+                            ],
+                          ),
+                        )
+                      : ListView(
+                          padding: EdgeInsets.symmetric(horizontal: padding),
+                          children: [
+                            if (!isSearching) ...[
+                              Text(
+                                "Last Entered Customer",
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: width * 0.045,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              if (lastCustomer != null)
+                                CustomerCard(
+                                  customer: lastCustomer!,
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => CustomerDetailPage(
+                                            customer: lastCustomer!),
+                                      ),
+                                    );
+                                  },
+                                  onDocumentsTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => DocumentsPage(
+                                            customer: lastCustomer!),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              const SizedBox(height: 20),
+                              Text(
+                                "All Customers",
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: width * 0.045,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                            ],
+                            ...filteredCustomers.map((customer) {
+                              if (lastCustomer != null &&
+                                  customer.phone == lastCustomer!.phone) {
+                                return const SizedBox.shrink();
+                              }
+                              return CustomerCard(
+                                customer: customer,
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => CustomerDetailPage(customer: customer),
+                                    ),
+                                  );
+                                },
+                                onDocumentsTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => DocumentsPage(customer: customer),
+                                    ),
+                                  );
+                                },
+                              );
+                            }),
+                          ],
+                        ),
+                ),
+              ],
             ),
+          ),
+        ],
+      ),
+
+      bottomNavigationBar: _buildBottomNavigationBar(),
+    );
+  }
+
+  Widget _buildBottomNavigationBar() {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final navHeight = screenWidth * 0.18;
+
+    return SafeArea(
+      minimum: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        height: navHeight,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 25,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildNavBarItem(Icons.home, 'Home', false, _navigateToDashboard),
+            _buildNavBarItem(Icons.group, 'Customers', true, () {}),
+            _buildNavBarItem(Icons.add_circle, 'Add', false, _navigateToAddUserPage),
+            _buildNavBarItem(Icons.notifications, 'Events', false, _navigateToEvents),
+            _buildNavBarItem(Icons.menu, 'Menu', false, () {}),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildNavBarItem(IconData icon, String label, bool isSelected, VoidCallback onTap) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final iconSize = screenWidth * 0.07;
+    final fontSize = screenWidth * 0.03;
+
+    return InkWell(
+      onTap: onTap,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            icon,
+            color: isSelected ? kPrimaryBlue : Colors.grey[400],
+            size: iconSize,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: fontSize,
+              color: isSelected ? kPrimaryBlue : Colors.grey[400],
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class CustomerCard extends StatefulWidget {
+// 🔹 Customer Card with separate name + surname
+class CustomerCard extends StatelessWidget {
   final model.Customer customer;
-  final double avatarRadius;
   final VoidCallback? onTap;
   final VoidCallback? onDocumentsTap;
 
   const CustomerCard({
     super.key,
     required this.customer,
-    required this.avatarRadius,
     this.onTap,
     this.onDocumentsTap,
   });
 
   @override
-  State<CustomerCard> createState() => _CustomerCardState();
-}
-
-class _CustomerCardState extends State<CustomerCard> with SingleTickerProviderStateMixin {
-  bool _pressed = false;
-
-  void _onTapDown(TapDownDetails details) {
-    setState(() {
-      _pressed = true;
-    });
-  }
-
-  void _onTapUp(TapUpDetails details) {
-    setState(() {
-      _pressed = false;
-    });
-  }
-
-  void _onTapCancel() {
-    setState(() {
-      _pressed = false;
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final borderColor = Colors.black;
-
-    return AnimatedScale(
-      scale: _pressed ? 0.97 : 1.0,
-      duration: const Duration(milliseconds: 100),
-      curve: Curves.easeOut,
-      child: GestureDetector(
-        onTapDown: _onTapDown,
-        onTapUp: _onTapUp,
-        onTapCancel: _onTapCancel,
-        onTap: widget.onTap,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 15),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: borderColor),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                offset: const Offset(0, 4),
-                blurRadius: 8,
-                spreadRadius: 1,
-              ),
-              BoxShadow(
-                color: Colors.black.withOpacity(0.06),
-                offset: const Offset(0, 2),
-                blurRadius: 4,
-                spreadRadius: 0,
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: widget.avatarRadius,
-                backgroundColor: borderColor.withOpacity(0.1),
-                backgroundImage: widget.customer.imageBytes != null
-                    ? MemoryImage(widget.customer.imageBytes!)
-                    : null,
-                child: widget.customer.imageBytes == null
-                    ? Icon(
-                  Icons.person,
-                  size: widget.avatarRadius * 1.5,
-                  color: Colors.black,
-                )
-                    : null,
-              ),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.customer.name,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: width * 0.05,
-                        color: borderColor,
-                      ),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 15),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.blueGrey.shade100),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 6,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 30,
+              backgroundColor: Colors.blue.shade50,
+              backgroundImage: customer.imageBytes != null
+                  ? MemoryImage(customer.imageBytes!)
+                  : null,
+              child: customer.imageBytes == null
+                  ? const Icon(Icons.person, size: 30, color: Colors.blueGrey)
+                  : null,
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    customer.name,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
                     ),
-                    Divider(color: borderColor),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (customer.surname.isNotEmpty) ...[
+                    const SizedBox(height: 4),
                     Text(
-                      widget.customer.phone,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: width * 0.045,
-                        color: borderColor.withOpacity(0.7),
+                      customer.surname,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.black54,
                       ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
+                  const SizedBox(height: 6),
+                  Text(
+                    customer.phone,
+                    style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            ElevatedButton(
+              onPressed: onDocumentsTap,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF38B6E4),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: borderColor),
-                  foregroundColor: borderColor,
-                ),
-                onPressed: widget.onDocumentsTap,
-                child: const Text('Documents'),
-              ),
-            ],
-          ),
+              child: const Text("Docs"),
+            ),
+          ],
         ),
       ),
     );

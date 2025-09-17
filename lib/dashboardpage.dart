@@ -11,24 +11,26 @@ void main() {
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Dashboard',
       theme: ThemeData(
-        fontFamily: 'Montserrat', // You might need to add this font to your project
+        fontFamily: 'Montserrat',
         primaryColor: const Color(0xFF3B5998),
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3B5998)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF3B5998),
+        ),
       ),
       home: const Dashboardpage(),
     );
   }
 }
 
-// Colors from the design
+// Colors
 const kPrimaryBlue = Color(0xFF3B5998);
-const kShadowColor = Color(0xFFE5E5E5);
 
 class Dashboardpage extends StatefulWidget {
   const Dashboardpage({super.key});
@@ -68,9 +70,7 @@ class _DashboardpageState extends State<Dashboardpage> {
                 birthdayCount++;
               }
             }
-          } catch (_) {
-            // ignore parse errors
-          }
+          } catch (_) {}
         }
       }
 
@@ -120,27 +120,84 @@ class _DashboardpageState extends State<Dashboardpage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
+
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(120),
+        child: AppBar(
+          automaticallyImplyLeading: false,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          flexibleSpace: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Background Image
+              Container(
+                decoration: const BoxDecoration(
+                  image: DecorationImage(
+                    image: AssetImage("assets/images/Background2.jpeg"),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+              SafeArea(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.asset(
+                              "assets/images/logo2.png",
+                              height: 60,
+                              width: 90,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          const SizedBox(width: 15),
+                          const Expanded(
+                            child: Text(
+                              'Maruthi \nInsurance care,',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
       backgroundColor: Colors.white,
       body: SafeArea(
         child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 20),
-                _buildHeader(),
-                const SizedBox(height: 30),
-                _buildSearchBar(),
-                const SizedBox(height: 30),
-                _buildEventsSection(),
-                const SizedBox(height: 30),
-                _buildQuickActionsSection(),
-                const SizedBox(height: 30),
-                _buildCustomerStatsSection(),
-                const SizedBox(height: 20),
-              ],
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 30),
+              _buildEventsSection(),
+              const SizedBox(height: 30),
+              _buildQuickActionsSection(),
+              const SizedBox(height: 30),
+              _buildCustomerStatsSection(),
+              const SizedBox(height: 20),
+            ],
           ),
         ),
       ),
@@ -148,72 +205,14 @@ class _DashboardpageState extends State<Dashboardpage> {
     );
   }
 
-  Widget _buildHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Hello,',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w400,
-                color: Color(0xFF6B7280),
-              ),
-            ),
-            Text(
-              'Company Name',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.black.withOpacity(0.85),
-              ),
-            ),
-          ],
-        ),
-        const CircleAvatar(
-          radius: 25,
-          backgroundColor: Colors.grey, // Placeholder for an image
-          child: Icon(Icons.person, color: Colors.white),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSearchBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Row(
-        children: [
-          Icon(Icons.search, color: Color(0xFF9CA3AF)),
-          SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Search for customers',
-                hintStyle: TextStyle(color: Color(0xFF9CA3AF)),
-                border: InputBorder.none,
-                isDense: true,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // ---------------- UI Widgets ----------------
 
   Widget _buildEventsSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Today\'s Events',
+          "Today's Events",
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
@@ -226,7 +225,7 @@ class _DashboardpageState extends State<Dashboardpage> {
           children: [
             Expanded(
               child: _buildEventCard(
-                'Today\'s Birthday',
+                " Birthday",
                 '$_birthdayCount',
                 Icons.cake,
                 const Color(0xFFFCE1C2),
@@ -236,11 +235,11 @@ class _DashboardpageState extends State<Dashboardpage> {
             const SizedBox(width: 20),
             Expanded(
               child: _buildEventCard(
-                'Total Customers',
-                '$_customerCount',
-                Icons.groups,
-                const Color(0xFFC2D9FC),
-                () => _navigateToCustomerScreen(),
+                "Day Events",
+                '$_birthdayCount', // placeholder
+                Icons.event,
+                const Color.fromARGB(255, 230, 255, 161),
+                () => _navigateTodayEventsPage(),
               ),
             ),
           ],
@@ -250,11 +249,16 @@ class _DashboardpageState extends State<Dashboardpage> {
   }
 
   Widget _buildEventCard(
-      String title, String count, IconData icon, Color color, VoidCallback onTap) {
+    String title,
+    String count,
+    IconData icon,
+    Color color,
+    VoidCallback onTap,
+  ) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        height: 150, // Set a fixed height
+        height: 150,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: color,
@@ -271,12 +275,7 @@ class _DashboardpageState extends State<Dashboardpage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Icon(
-              icon,
-              size: 40,
-              color: kPrimaryBlue,
-            ),
-            const SizedBox(height: 8),
+            Icon(icon, size: 40, color: kPrimaryBlue),
             Text(
               count,
               style: const TextStyle(
@@ -427,37 +426,48 @@ class _DashboardpageState extends State<Dashboardpage> {
     );
   }
 
+  // ---------------- Responsive Floating Nav Bar ----------------
   Widget _buildBottomNavigationBar() {
-    return Container(
-      height: 70,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 20,
-            offset: const Offset(0, -5),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildNavBarItem(Icons.home, 'Home', true),
-          _buildNavBarItem(Icons.group, 'Customers', false),
-          _buildNavBarItem(Icons.add_circle, 'Add', false),
-          _buildNavBarItem(Icons.notifications, 'Events', false),
-          _buildNavBarItem(Icons.person, 'Profile', false),
-        ],
+    final screenWidth = MediaQuery.of(context).size.width;
+    final navHeight = screenWidth * 0.18; // responsive height (~65–80px)
+
+    return SafeArea(
+      minimum: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        height: navHeight,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 25,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildNavBarItem(Icons.home, 'Home', true),
+            _buildNavBarItem(Icons.group, 'Customers', false),
+            _buildNavBarItem(Icons.add_circle, 'Add', false),
+            _buildNavBarItem(Icons.notifications, 'Events', false),
+            _buildNavBarItem(Icons.person, 'Profile', false),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildNavBarItem(IconData icon, String label, bool isSelected) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final iconSize = screenWidth * 0.07; // responsive icon (~26-32px)
+    final fontSize = screenWidth * 0.03; // responsive text (~12px)
+
     return InkWell(
       onTap: () {
-        // Implement navigation logic here
         if (label == 'Customers') {
           _navigateToCustomerScreen();
         } else if (label == 'Add') {
@@ -472,13 +482,13 @@ class _DashboardpageState extends State<Dashboardpage> {
           Icon(
             icon,
             color: isSelected ? kPrimaryBlue : Colors.grey[400],
-            size: 28,
+            size: iconSize,
           ),
           const SizedBox(height: 4),
           Text(
             label,
             style: TextStyle(
-              fontSize: 12,
+              fontSize: fontSize,
               color: isSelected ? kPrimaryBlue : Colors.grey[400],
               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             ),
