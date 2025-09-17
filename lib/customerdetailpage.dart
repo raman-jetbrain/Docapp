@@ -58,7 +58,6 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     if (customersJson != null && customersJson.isNotEmpty) {
       try {
         customersList = jsonDecode(customersJson);
-        if (customersList is! List) customersList = [];
       } catch (_) {
         customersList = [];
       }
@@ -390,7 +389,6 @@ class _NotesEditorCard extends StatefulWidget {
   final VoidCallback onSave;
 
   const _NotesEditorCard({
-    super.key,
     required this.controller,
     required this.onSave,
   });
