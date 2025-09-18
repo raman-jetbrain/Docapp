@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:docapp/CustomDrawerPage.dart';
 import 'package:docapp/adduserpage%20.dart';
 import 'package:docapp/customerpage.dart';
 import 'package:docapp/dateventspage.dart';
@@ -117,11 +118,19 @@ class _DashboardpageState extends State<Dashboardpage> {
     }
   }
 
+  Future<void> _navigateToCustomerDrawerPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) =>  AppDrawer()),
+    );
+    if (mounted) {
+      _loadCustomerData();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
-
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(120),
         child: AppBar(
@@ -204,8 +213,6 @@ class _DashboardpageState extends State<Dashboardpage> {
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
   }
-
-  // ---------------- UI Widgets ----------------
 
   Widget _buildEventsSection() {
     return Column(
@@ -426,7 +433,6 @@ class _DashboardpageState extends State<Dashboardpage> {
     );
   }
 
-  // ---------------- Responsive Floating Nav Bar ----------------
   Widget _buildBottomNavigationBar() {
     final screenWidth = MediaQuery.of(context).size.width;
     final navHeight = screenWidth * 0.18; // responsive height (~65–80px)
@@ -454,7 +460,7 @@ class _DashboardpageState extends State<Dashboardpage> {
             _buildNavBarItem(Icons.group, 'Customers', false),
             _buildNavBarItem(Icons.add_circle, 'Add', false),
             _buildNavBarItem(Icons.notifications, 'Events', false),
-            _buildNavBarItem(Icons.person, 'Profile', false),
+            _buildNavBarItem(Icons.menu, 'Menu', false),
           ],
         ),
       ),
@@ -474,6 +480,8 @@ class _DashboardpageState extends State<Dashboardpage> {
           _navigateToAddUserPage();
         } else if (label == 'Events') {
           _navigateTodayEventsPage();
+        } else if (label == 'Menu') {
+          _navigateToCustomerDrawerPage();
         }
       },
       child: Column(
