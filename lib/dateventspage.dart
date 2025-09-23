@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:docapp/Template_list_page.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -49,13 +50,17 @@ class _DayEventsPageState extends State<DayEventsPage> {
         }
       }
 
-      setState(() {
-        _todayCustomers = matchedCustomers;
-      });
+      if (mounted) {
+        setState(() {
+          _todayCustomers = matchedCustomers;
+        });
+      }
     } else {
-      setState(() {
-        _todayCustomers = [];
-      });
+      if (mounted) {
+        setState(() {
+          _todayCustomers = [];
+        });
+      }
     }
   }
 
@@ -67,17 +72,17 @@ class _DayEventsPageState extends State<DayEventsPage> {
         backgroundColor: const Color(0xFF38B6E4),
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios),
-          onPressed: () => Navigator.of(context).pop(),
+          icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
+          onPressed: () => Navigator.of(context).maybePop(),
         ),
         title: const Text(
           'Company Name',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.notifications_none),
+            icon: const Icon(Icons.notifications_none, color: Colors.white),
             onPressed: () {},
           ),
         ],
@@ -110,9 +115,23 @@ class _DayEventsPageState extends State<DayEventsPage> {
                       itemCount: _todayCustomers.length,
                       itemBuilder: (context, index) {
                         final customer = _todayCustomers[index];
+                        final name = (customer['name'] ?? '') as String;
+                        final phone = (customer['phone'] ?? '') as String;
+
                         return _buildCustomerCard(
-                          name: customer['name'] ?? '',
-                          phone: customer['phone'] ?? '',
+                          name: name,
+                          phone: phone,
+                          onTap: () {
+                            // Navigate to the template picker page
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => TemplateListScreen(
+            
+                                ),
+                              ),
+                            );
+                          },
                         );
                       },
                     ),
@@ -123,68 +142,77 @@ class _DayEventsPageState extends State<DayEventsPage> {
     );
   }
 
-  Widget _buildCustomerCard({required String name, required String phone}) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 6,
-            offset: Offset(2, 2),
-          ),
-        ],
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Row(
-        children: [
-          // Circular avatar placeholder
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              shape: BoxShape.circle,
+  // Make the card tappable to go to templates
+  Widget _buildCustomerCard({
+    required String name,
+    required String phone,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black26,
+              blurRadius: 6,
+              offset: Offset(2, 2),
             ),
-            child: const Icon(
-              Icons.person,
-              size: 30,
-              color: Colors.white70,
+          ],
+          border: Border.all(color: Colors.black12),
+        ),
+        child: Row(
+          children: [
+            // Circular avatar placeholder
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.person,
+                size: 30,
+                color: Colors.white70,
+              ),
             ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Container(
-                  height: 1,
-                  color: Colors.grey.shade300,
-                  margin: const EdgeInsets.only(right: 100),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  phone,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+                  const SizedBox(height: 4),
+                  Container(
+                    height: 1,
+                    color: Colors.grey.shade300,
+                    margin: const EdgeInsets.only(right: 100),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  Text(
+                    phone,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            const Icon(Icons.chevron_right, color: Colors.black45),
+          ],
+        ),
       ),
     );
   }

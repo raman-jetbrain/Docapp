@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:docapp/model/DocumentsItem.dart';
+import 'package:docapp/model/DocumentsItem.dart' show DocumentItem;
 import 'package:docapp/model/customermodel.dart' as model;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,11 +9,9 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
-import 'package:photo_view/photo_view.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const kPrimaryBlue = Color(0xFF3B5998);
 
 class DocumentsPage extends StatefulWidget {
   final model.Customer customer;
@@ -29,6 +27,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
   final List<DocumentItem> _docs = [];
   String? _selectedId;
 
+  Color get brandBlue => const Color(0xFF38B6E4);
+  Color get borderColor => Colors.black;
+  Color get iconColor => Colors.black;
+
   @override
   void initState() {
     super.initState();
@@ -41,13 +43,12 @@ class _DocumentsPageState extends State<DocumentsPage> {
     super.dispose();
   }
 
-  // ---------------- Data Load/Save ----------------
   Future<void> _loadDocuments() async {
     final prefs = await SharedPreferences.getInstance();
-    final key = 'docs_${widget.customer.phone}';
+    final key = 'docs_${widget.customer.phone}'; // Use phone as unique key
     final docsJson = prefs.getString(key);
     if (docsJson != null) {
-      final docsList = json.decode(docsJson) as List;
+      final List<dynamic> docsList = json.decode(docsJson);
       setState(() {
         _docs.clear();
         _docs.addAll(docsList.map((e) => DocumentItem.fromMap(Map<String, dynamic>.from(e))));
@@ -62,7 +63,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
     await prefs.setString(key, json.encode(docsMapList));
   }
 
-  // ---------------- Actions ----------------
   Future<void> _addType() async {
     final t = _typeCtrl.text.trim();
     if (t.isEmpty) {
@@ -88,15 +88,18 @@ class _DocumentsPageState extends State<DocumentsPage> {
     final f = res.files.first;
     final dir = await getApplicationDocumentsDirectory();
     final ext = p.extension(f.name);
-    final target = File(
-        p.join(dir.path, 'docs_${d.id}_${DateTime.now().millisecondsSinceEpoch}$ext'));
+    final target = File(p.join(dir.path, 'docs_${d.id}_${DateTime.now().millisecondsSinceEpoch}$ext'));
 
     if (f.readStream != null) {
       final sink = target.openWrite();
       await f.readStream!.pipe(sink);
+      await sink.flush();
       await sink.close();
     } else if (f.path != null) {
       await File(f.path!).copy(target.path);
+    } else {
+      _snack('Could not read selected file');
+      return;
     }
 
     setState(() {
@@ -109,13 +112,15 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   Future<void> _share(DocumentItem d) async {
     final local = await _ensureLocalFile(d);
-    if (local != null) {
-      await Share.shareXFiles([XFile(local)], text: d.title);
-    } else if (d.remoteUrl != null) {
-      await Share.share(d.remoteUrl!);
-    } else {
-      _snack('No file to share');
+    if (local == null) {
+      if (d.remoteUrl != null) {
+        await Share.share(d.remoteUrl!);
+      } else {
+        _snack('No file to share');
+      }
+      return;
     }
+    await Share.shareXFiles([XFile(local)], text: d.title);
   }
 
   Future<void> _download(DocumentItem d) async {
@@ -129,9 +134,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
     if (!await downloadsDir.exists()) {
       await downloadsDir.create(recursive: true);
     }
-    final dest = p.join(downloadsDir.path, p.basename(local));
+    final filename = p.basename(local);
+    final dest = p.join(downloadsDir.path, filename);
     await File(local).copy(dest);
-    _snack('Saved to $dest');
+    _snack('Saved to ${downloadsDir.path}');
   }
 
   Future<String?> _ensureLocalFile(DocumentItem d) async {
@@ -157,258 +163,368 @@ class _DocumentsPageState extends State<DocumentsPage> {
   void _open(DocumentItem d) async {
     final local = await _ensureLocalFile(d);
     if (local == null) {
-      _snack('Upload or set a remote URL first');
+      _snack('Please upload or set a remote URL first');
       return;
     }
     final mime = d.mimeType ?? _guessMimeFromExt(p.extension(local));
+
     if (mime.startsWith('image/')) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => ImageViewerScreen(path: local, title: d.title)),
-      );
-    } else if (mime == 'application/pdf') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => PdfViewerScreen(path: local, title: d.title)),
-      );
+      if (!mounted) return;
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => ImageViewerScreen(path: local, title: d.title)));
+    } else if (mime == 'application/pdf' || p.extension(local).toLowerCase() == '.pdf') {
+      if (!mounted) return;
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => PdfViewerScreen(path: local, title: d.title)));
     } else {
       await OpenFilex.open(local);
     }
   }
 
-  Future<void> _confirmDelete(DocumentItem d) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete'),
-        content: const Text('Are you sure?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Delete', style: TextStyle(color: Colors.red))),
-        ],
-      ),
-    );
-    if (confirm == true) {
-      setState(() => _docs.removeWhere((x) => x.id == d.id));
-      await _saveDocuments();
+  void _selectForDelete(String id) {
+    setState(() => _selectedId = id);
+  }
+
+  void _clearSelection() {
+    if (_selectedId != null) {
+      setState(() => _selectedId = null);
     }
   }
 
-  void _snack(String msg) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  Future<void> _confirmDelete(DocumentItem d) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w800)),
+        content: const Text('Are you sure delete?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('OK', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
 
-  static String _extFromUrl(String url) => p.extension(Uri.parse(url).path);
-  static String _guessMimeFromExt(String ext) {
-    switch (ext.toLowerCase()) {
-      case '.jpg':
-      case '.jpeg':
-        return 'image/jpeg';
-      case '.png':
-        return 'image/png';
-      case '.gif':
-        return 'image/gif';
-      case '.pdf':
-        return 'application/pdf';
-      case '.heic':
-        return 'image/heic';
+    if (shouldDelete == true) {
+      setState(() {
+        _docs.removeWhere((x) => x.id == d.id);
+        _selectedId = null;
+      });
+      await _saveDocuments();
+      _snack('Deleted');
     }
+  }
+
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  static String _extFromUrl(String url) {
+    final u = Uri.parse(url);
+    final path = u.path;
+    final ext = p.extension(path);
+    return ext.isEmpty ? '' : ext;
+  }
+
+  static String _guessMimeFromExt(String ext) {
+    final e = ext.toLowerCase();
+    if (e == '.jpg' || e == '.jpeg') return 'image/jpeg';
+    if (e == '.png') return 'image/png';
+    if (e == '.gif') return 'image/gif';
+    if (e == '.pdf') return 'application/pdf';
+    if (e == '.heic') return 'image/heic';
     return 'application/octet-stream';
   }
 
   String _initials(String name) {
-    final parts = name.split(' ');
-    if (parts.isEmpty) return '?';
-    if (parts.length == 1) return parts.first[0].toUpperCase();
-    return parts.first[0].toUpperCase() + parts.last[0].toUpperCase();
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
   }
 
-  // ---------------- UI ----------------
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final padding = width * 0.05;
+    final fieldHeight = 50.0;
 
     return Scaffold(
-      extendBody: true,
       backgroundColor: Colors.white,
-
-      // 🔹 AppBar with background image + logo (like Dashboard)
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(120),
-        child: AppBar(
-          automaticallyImplyLeading: false,
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          flexibleSpace: Stack(
-            fit: StackFit.expand,
-            children: [
-              Container(
-                decoration: const BoxDecoration(
-                  image: DecorationImage(
-                    image: AssetImage("assets/images/Background2.jpeg"),
-                    fit: BoxFit.cover,
-                  ),
+      appBar: AppBar(
+        backgroundColor: brandBlue,
+        toolbarHeight: 80, // increased height
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Row(
+          children: [
+            CircleAvatar(
+              radius: 20,
+              backgroundColor: Colors.white,
+              child: widget.customer.imageBytes != null
+                  ? ClipOval(
+                      child: Image.memory(
+                        widget.customer.imageBytes!,
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  : Text(
+                      _initials(widget.customer.name),
+                      style: TextStyle(
+                        color: brandBlue,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 20,
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  widget.customer.name,
+                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-              ),
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                  child: Row(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.asset(
-                          "assets/images/logo2.png",
-                          height: 60,
-                          width: 90,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(widget.customer.name,
-                                style: const TextStyle(
-                                    fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
-                            Text(widget.customer.phone,
-                                style: const TextStyle(color: Colors.white70, fontSize: 14)),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
+                Text(
+                  widget.customer.phone,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ),
       ),
-
       body: Column(
         children: [
+          // Fixed Add Type field at top
           Container(
+            height: fieldHeight,
             margin: EdgeInsets.all(padding),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: borderColor),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: const [
+                BoxShadow(color: Colors.black12, offset: Offset(1, 1), blurRadius: 2),
+              ],
+            ),
             child: Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: _typeCtrl,
-                    decoration: const InputDecoration(
-                        hintText: 'Document Type',
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.all(10)),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: TextField(
+                      controller: _typeCtrl,
+                      style: const TextStyle(color: Colors.black),
+                      decoration: const InputDecoration(
+                        hintText: 'Type',
+                        hintStyle: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+                        border: InputBorder.none,
+                      ),
+                    ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: kPrimaryBlue),
-                  onPressed: _addType,
-                  child: const Text('Add'),
+                SizedBox(
+                  height: fieldHeight,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: borderColor),
+                      foregroundColor: borderColor,
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: BorderRadius.only(
+                          topRight: Radius.circular(11),
+                          bottomRight: Radius.circular(11),
+                        ),
+                      ),
+                    ),
+                    onPressed: _addType,
+                    child: const Text('Add'),
+                  ),
                 ),
               ],
             ),
           ),
-          const Divider(),
-          Expanded(
-            child: _docs.isEmpty
-                ? const Center(child: Text("No documents added"))
-                : ListView.builder(
-                    itemCount: _docs.length,
-                    itemBuilder: (context, index) {
-                      final d = _docs[index];
-                      return Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.folder, color: kPrimaryBlue),
-                          title: Text(d.title),
-                          onTap: () => _open(d),
-                          trailing: Wrap(spacing: 4, children: [
-                            IconButton(icon: const Icon(Icons.upload), onPressed: () => _pickAndAttach(d)),
-                            if (d.localPath != null)
-                              IconButton(icon: const Icon(Icons.download), onPressed: () => _download(d)),
-                            IconButton(icon: const Icon(Icons.share), onPressed: () => _share(d)),
-                            IconButton(
-                                icon: const Icon(Icons.delete, color: Colors.red),
-                                onPressed: () => _confirmDelete(d)),
-                          ]),
-                        ),
-                      );
-                    },
-                  ),
+
+          // Documents list header
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: padding),
+            child: Row(
+              children: [
+                Text(
+                  'Documents List',
+                  style: TextStyle(fontSize: width * 0.045, fontWeight: FontWeight.bold, color: borderColor),
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
+          const Divider(height: 1, thickness: 1, color: Colors.black12),
 
-      // 🔹 Floating Bottom NavBar
-      bottomNavigationBar: Container(
-        margin: const EdgeInsets.only(bottom: 12, left: 16, right: 16),
-        height: 65,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(25),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 20, offset: const Offset(0, 8))
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _navItem(Icons.home, "Home", false),
-            _navItem(Icons.group, "Customers", false),
-            _navItem(Icons.add_circle, "Add", false),
-            _navItem(Icons.event, "Events", false),
-            _navItem(Icons.folder, "Documents", true),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _navItem(IconData icon, String label, bool selected) {
-    return InkWell(
-      onTap: () {}, // TODO: add navigation
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: selected ? kPrimaryBlue : Colors.grey),
-          Text(label, style: TextStyle(color: selected ? kPrimaryBlue : Colors.grey)),
+          // Documents list scrolls under system nav bar properly
+          Expanded(
+            child: ListView.separated(
+              padding: EdgeInsets.fromLTRB(padding, 10, padding, padding),
+              itemCount: _docs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final d = _docs[index];
+                final selected = _selectedId == d.id;
+                return _DocCard(
+                  title: d.title,
+                  borderColor: borderColor,
+                  iconColor: iconColor,
+                  selected: selected,
+                  onTap: () {
+                    if (selected) {
+                      _clearSelection();
+                    } else {
+                      _open(d);
+                    }
+                  },
+                  onLongPress: () => _selectForDelete(d.id),
+                  onDelete: () => _confirmDelete(d),
+                  onUpload: () => _pickAndAttach(d),
+                  onDownload: d.localPath != null ? () => _download(d) : null,
+                  onShare: () => _share(d),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-// ---------------- Viewers ----------------
+class _DocCard extends StatelessWidget {
+  const _DocCard({
+    required this.title,
+    required this.onTap,
+    required this.onUpload,
+    required this.onDownload,
+    required this.onShare,
+    required this.borderColor,
+    required this.iconColor,
+    required this.selected,
+    this.onLongPress,
+    this.onDelete,
+  });
+
+  final String title;
+  final VoidCallback onTap;
+  final VoidCallback onUpload;
+  final VoidCallback? onDownload;
+  final VoidCallback onShare;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onDelete;
+  final Color borderColor;
+  final Color iconColor;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = selected ? Colors.red : Colors.white;
+    final textColor = selected ? Colors.white : Colors.black87;
+    final border = selected ? Colors.red : borderColor;
+
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(12),
+      elevation: 2,
+      shadowColor: Colors.black12,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: border, width: 1),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: textColor),
+                ),
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: onUpload,
+                    icon: Icon(Icons.upload_rounded, color: iconColor, size: 24),
+                    tooltip: 'Upload',
+                  ),
+                  if (onDownload != null)
+                    IconButton(
+                      onPressed: onDownload,
+                      icon: Icon(Icons.download_rounded, color: iconColor, size: 24),
+                      tooltip: 'Download',
+                    ),
+                  IconButton(
+                    onPressed: onShare,
+                    icon: Icon(Icons.share, color: iconColor, size: 22),
+                    tooltip: 'Share',
+                  ),
+                  if (selected && onDelete != null)
+                    IconButton(
+                      onPressed: onDelete,
+                      icon: const Icon(Icons.delete, color: Colors.white, size: 24),
+                      tooltip: 'Delete',
+                    ),
+                ],
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ImageViewerScreen extends StatelessWidget {
-  final String path, title;
   const ImageViewerScreen({super.key, required this.path, required this.title});
+  final String path;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(title), backgroundColor: kPrimaryBlue),
-      body: PhotoView(imageProvider: FileImage(File(path))),
+      appBar: AppBar(title: Text(title), backgroundColor: const Color(0xFF38B6E4)),
+      body: PhotoView(
+        backgroundDecoration: const BoxDecoration(color: Colors.white),
+        imageProvider: FileImage(File(path)),
+        minScale: PhotoViewComputedScale.contained,
+        maxScale: PhotoViewComputedScale.covered * 2.5,
+      ),
     );
   }
 }
 
 class PdfViewerScreen extends StatefulWidget {
-  final String path, title;
   const PdfViewerScreen({super.key, required this.path, required this.title});
+  final String path;
+  final String title;
+
   @override
   State<PdfViewerScreen> createState() => _PdfViewerScreenState();
 }
 
 class _PdfViewerScreenState extends State<PdfViewerScreen> {
   late PdfControllerPinch controller;
+
   @override
   void initState() {
     super.initState();
@@ -424,8 +540,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(backgroundColor: kPrimaryBlue, title: Text(widget.title)),
+      appBar: AppBar(title: Text(widget.title), backgroundColor: const Color(0xFF38B6E4)),
       body: PdfViewPinch(controller: controller),
     );
   }
 }
+
