@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 class Customer {
+
   final String name;
   final String surname;
   final String phone;
@@ -12,6 +13,10 @@ class Customer {
   final String? gender;
   final List<Map<String, String>>? customEntries;
 
+  var others;
+
+  var id;
+
   Customer({
     required this.name,
     required this.surname,
@@ -21,7 +26,7 @@ class Customer {
     this.address,
     this.dob,
     this.gender,
-    this.customEntries,
+    this.customEntries, String? photo,
   });
 
   // 🔹 Factory for decoding from stored map
@@ -45,6 +50,8 @@ class Customer {
           : null,
     );
   }
+
+
 
   // 🔹 Convert object to Map for saving into SharedPreferences/DB
   Map<String, dynamic> toMap() {

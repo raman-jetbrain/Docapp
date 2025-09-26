@@ -1,35 +1,153 @@
 import 'dart:convert';
 import 'package:docapp/CustomDrawerPage.dart';
 import 'package:docapp/adduserpage%20.dart';
+import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/customerpage.dart';
 import 'package:docapp/dateventspage.dart';
+import 'package:docapp/model/customer.dart' as model;
+import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
-void main() {
-  runApp(const MyApp());
-}
+class CustomerApiService {
+  final String baseUrl = ApiConstants.baseUrl;
+  final http.Client _client;
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  static const bool _enableHttpLog = true;
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Dashboard',
-      theme: ThemeData(
-        fontFamily: 'Montserrat',
-        primaryColor: const Color(0xFF3B5998),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF3B5998),
-        ),
-      ),
-      home: const Dashboardpage(),
-    );
+  CustomerApiService({http.Client? client}) : _client = client ?? http.Client();
+
+  // Handles both sync and async TokenStorage.getToken() implementations
+  Future<String?> _resolveToken() async {
+    final Object? maybeFuture = TokenStorage.getToken();
+    if (maybeFuture is Future) {
+      final t = await maybeFuture;
+      return t as String?;
+    }
+    return maybeFuture as String?;
+  }
+
+  Uri _buildUri(String base, String path) {
+    final normalizedBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    return Uri.parse('$normalizedBase$normalizedPath');
+  }
+
+  // --- Logging helpers ---
+  void _logRequest({
+    required String method,
+    required Uri uri,
+    Map<String, String>? headers,
+    String? body,
+  }) {
+    if (!_enableHttpLog) return;
+    debugPrint('[HTTP] $method $uri');
+    if (headers != null) debugPrint('[HTTP] Headers: ${jsonEncode(headers)}');
+    if (body != null && body.isNotEmpty) debugPrint('[HTTP] Body: $body');
+  }
+
+  void _logResponse(http.Response resp) {
+    if (!_enableHttpLog) return;
+    debugPrint('[HTTP] <- ${resp.statusCode} ${resp.request?.url}');
+    debugPrint('[HTTP] Response body: ${resp.body}');
+  }
+
+  // --- GET customers ---
+  Future<List<model.Customer>> getCustomers() async {
+    final token = await _resolveToken();
+    if (token == null || token.isEmpty) {
+      debugPrint('[CustomerApi] Missing auth token');
+      throw Exception('Missing auth token');
+    }
+
+    final uri = _buildUri(baseUrl, '/api/CustomerDataM/GetAsync');
+    final headers = {
+      'Accept': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+
+    _logRequest(method: 'GET', uri: uri, headers: headers);
+    final resp = await _client.get(uri, headers: headers);
+    _logResponse(resp);
+
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw Exception('GET ${uri.path} failed: ${resp.statusCode} ${resp.body}');
+    }
+
+    final decoded = json.decode(resp.body);
+
+    // Your API uses "Response"
+    final List<dynamic> list =
+        decoded is Map && decoded['Response'] is List
+            ? decoded['Response'] as List
+            : (decoded is List ? decoded : const []);
+
+    final customers = list
+        .map((e) => _mapApiToCustomer(Map<String, dynamic>.from(e as Map)))
+        .toList();
+
+    // De-duplicate by phone
+    final seen = <String>{};
+    final unique = <model.Customer>[];
+    for (final c in customers) {
+      if (seen.add(c.phone)) unique.add(c);
+    }
+
+    debugPrint('[CustomerApi] Mapped customers: ${unique.length}');
+    return unique;
+  }
+
+  // Map exact keys from your payload + optional base64 image
+  model.Customer _mapApiToCustomer(Map<String, dynamic> m) {
+    String first = (m['Name'] ?? '').toString().trim();
+    String last  = (m['Surname'] ?? '').toString().trim();
+
+    // If Name contains full name and Surname is empty, split
+    if (last.isEmpty && first.contains(' ')) {
+      final parts = first.split(RegExp(r'\s+'));
+      first = parts.isNotEmpty ? parts.first : '';
+      last = parts.length > 1 ? parts.sublist(1).join(' ') : '';
+    }
+
+    final phone   = (m['PhoneNumber'] ?? '').toString().trim();
+    final email   = (m['EmailId'] ?? '').toString().trim();
+    final address = (m['Address'] ?? '').toString().trim();
+    final gender  = (m['Gender'] ?? '').toString().trim();
+    final others  = (m['Others'] ?? '').toString().trim();
+
+    // Optional: base64 image via HttpFileData.FileData
+    dynamic bytes;
+    final httpFile = m['HttpFileData'];
+    if (httpFile is Map && httpFile['FileData'] is String) {
+      final b64 = (httpFile['FileData'] as String).trim();
+      if (b64.isNotEmpty) {
+        try {
+          bytes = base64Decode(b64); // Uint8List
+        } catch (_) {
+          // ignore invalid base64
+        }
+      }
+    }
+
+    // If you have DOB in API, add it here and to your model
+    // final dob = (m['DOB'] ?? m['DateOfBirth'] ?? '').toString().trim();
+
+    return model.Customer.fromMap({
+      'name': first,
+      'surname': last,
+      'phone': phone,
+      'email': email,
+      'address': address,
+      'gender': gender,
+      'others': others,
+      'imageBytes': bytes, // null unless FileData provided
+      // 'dob': dob, // enable if your model supports it
+    });
   }
 }
-
 // Colors
 const kPrimaryBlue = Color(0xFF3B5998);
 

@@ -1,7 +1,8 @@
 import 'dart:convert';
-import 'package:docapp/Template_list_page.dart';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'template_list_page.dart';
 
 class DayEventsPage extends StatefulWidget {
   const DayEventsPage({super.key});
@@ -76,7 +77,7 @@ class _DayEventsPageState extends State<DayEventsPage> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         title: const Text(
-          'Company Name',
+          'Day Events',
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
         centerTitle: true,
@@ -93,7 +94,7 @@ class _DayEventsPageState extends State<DayEventsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Day Events of Customers',
+              'Customers with Birthdays Today 🎉',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 18,
@@ -121,14 +122,12 @@ class _DayEventsPageState extends State<DayEventsPage> {
                         return _buildCustomerCard(
                           name: name,
                           phone: phone,
+                          photo: customer['photo'],
                           onTap: () {
-                            // Navigate to the template picker page
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => TemplateListScreen(
-            
-                                ),
+                                builder: (_) => TemplateListScreen(customer: {},),
                               ),
                             );
                           },
@@ -142,10 +141,10 @@ class _DayEventsPageState extends State<DayEventsPage> {
     );
   }
 
-  // Make the card tappable to go to templates
   Widget _buildCustomerCard({
     required String name,
     required String phone,
+    String? photo,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
@@ -167,19 +166,11 @@ class _DayEventsPageState extends State<DayEventsPage> {
         ),
         child: Row(
           children: [
-            // Circular avatar placeholder
-            Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.person,
-                size: 30,
-                color: Colors.white70,
-              ),
+            CircleAvatar(
+              radius: 28,
+              backgroundImage: (photo != null && photo.isNotEmpty)
+                  ? Image.file(File(photo)).image
+                  : const AssetImage("assets/default_avatar.png"),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -194,17 +185,10 @@ class _DayEventsPageState extends State<DayEventsPage> {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Container(
-                    height: 1,
-                    color: Colors.grey.shade300,
-                    margin: const EdgeInsets.only(right: 100),
-                  ),
-                  const SizedBox(height: 4),
                   Text(
                     phone,
                     style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                      color: Colors.grey,
                     ),
                   ),
                 ],

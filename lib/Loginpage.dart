@@ -148,7 +148,7 @@ class _LoginViewState extends State<LoginView> {
               SizedBox(
                 height: 200,
                 child: Center(
-                  child: Image.asset('assets/images/loginpage.png'),
+                  child: Image.asset('assets/images/Loginpage.png'),
                 ),
               ),
               const SizedBox(height: 20),

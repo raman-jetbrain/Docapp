@@ -1,8 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:docapp/api/customerBus.dart';
+import 'package:docapp/descriptionpage.dart';
 import 'package:docapp/documentspage.dart';
+import 'package:docapp/familydetailspage.dart';
 import 'package:docapp/model/customermodel.dart' as model;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
 
 class CustomerDetailPage extends StatefulWidget {
   final model.Customer customer;
@@ -15,11 +20,13 @@ class CustomerDetailPage extends StatefulWidget {
 class _CustomerDetailPageState extends State<CustomerDetailPage> {
   final TextEditingController _notesCtrl = TextEditingController();
   String _savedNotes = '';
+  String? _photoPath;
 
   @override
   void initState() {
     super.initState();
     _loadNotes();
+    _photoPath = widget.customer.phone; // use photo path, not phone
   }
 
   @override
@@ -28,19 +35,21 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     super.dispose();
   }
 
+  /* ---------------- Load & Save Notes ---------------- */
   Future<void> _loadNotes() async {
     final prefs = await SharedPreferences.getInstance();
     final String? customersJson = prefs.getString('customers');
     if (customersJson != null && customersJson.isNotEmpty) {
       try {
         final List<dynamic> customersList = json.decode(customersJson);
-        final customerData = customersList.firstWhere(
+        final Map<String, dynamic> customerData = customersList.cast<Map>().map((e) => Map<String, dynamic>.from(e)).firstWhere(
           (c) => c['phone'] == widget.customer.phone,
-          orElse: () => null,
+          orElse: () => {},
         );
-        if (customerData != null && mounted) {
+        if (customerData.isNotEmpty && mounted) {
           setState(() {
             _savedNotes = (customerData['notes'] ?? '').toString();
+            _photoPath = (customerData['photo'] ?? _photoPath)?.toString();
           });
         }
       } catch (_) {}
@@ -61,50 +70,121 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
       }
     }
 
-    final idx = customersList.indexWhere((c) => c['phone'] == widget.customer.phone);
+    Map<String, dynamic> updatedMap;
+    final idx = customersList.indexWhere((c) => (c is Map) && c['phone'] == widget.customer.phone);
     if (idx >= 0) {
-      customersList[idx] = {...customersList[idx], 'notes': note};
+      updatedMap = {
+        ...Map<String, dynamic>.from(customersList[idx]),
+        'notes': note,
+        'photo': _photoPath,
+      };
+      customersList[idx] = updatedMap;
     } else {
-      customersList.add({
+      updatedMap = {
         'name': widget.customer.name,
         'surname': widget.customer.surname,
         'phone': widget.customer.phone,
         'notes': note,
-      });
+        'photo': _photoPath,
+      };
+      customersList.add(updatedMap);
     }
 
     await prefs.setString('customers', jsonEncode(customersList));
 
+    // keep last_user in sync if same person
+    final lastUserJson = prefs.getString('last_user');
+    if (lastUserJson != null && lastUserJson.isNotEmpty) {
+      try {
+        final last = jsonDecode(lastUserJson) as Map<String, dynamic>;
+        if (last['phone'] == widget.customer.phone) {
+          final updatedLast = {...last, 'notes': note, 'photo': _photoPath};
+          await prefs.setString('last_user', jsonEncode(updatedLast));
+        }
+      } catch (_) {}
+    }
+
     if (!mounted) return;
     setState(() => _savedNotes = note);
-    Navigator.of(context).pop(); // close dialog
+    Navigator.of(context).pop();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Notes saved!')),
     );
+
+    // broadcast to other pages
+    final updatedCustomer = model.Customer.fromMap(updatedMap);
+    CustomerBus.notify(updatedCustomer);
   }
 
-  void _openNotesEditor() {
-    _notesCtrl.text = _savedNotes;
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return _NotesEditorCard(
-          controller: _notesCtrl,
-          onSave: _saveNotes,
-        );
-      },
-    );
+  /* ---------------- Image update logic ---------------- */
+  Future<void> _updateImage() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1) Update customers list
+    List<dynamic> customersList = [];
+    final customersJson = prefs.getString('customers');
+    if (customersJson != null && customersJson.isNotEmpty) {
+      try {
+        customersList = jsonDecode(customersJson);
+      } catch (_) {
+        customersList = [];
+      }
+    }
+
+    final idx = customersList.indexWhere((c) => (c is Map) && c['phone'] == widget.customer.phone);
+    Map<String, dynamic> updatedMap;
+    if (idx >= 0) {
+      updatedMap = {
+        ...Map<String, dynamic>.from(customersList[idx]),
+        'photo': pickedFile.path,
+      };
+      customersList[idx] = updatedMap;
+    } else {
+      updatedMap = {
+        'name': widget.customer.name,
+        'surname': widget.customer.surname,
+        'phone': widget.customer.phone,
+        'photo': pickedFile.path,
+        'notes': _savedNotes,
+      };
+      customersList.add(updatedMap);
+    }
+    await prefs.setString('customers', jsonEncode(customersList));
+
+    // 2) Update last_user if same customer
+    final lastUserJson = prefs.getString('last_user');
+    if (lastUserJson != null && lastUserJson.isNotEmpty) {
+      try {
+        final last = jsonDecode(lastUserJson) as Map<String, dynamic>;
+        if (last['phone'] == widget.customer.phone) {
+          final updatedLast = {...last, 'photo': pickedFile.path};
+          await prefs.setString('last_user', jsonEncode(updatedLast));
+        }
+      } catch (_) {}
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final primaryColor = const Color(0xFF38B6E4);
 
+    ImageProvider? headerImage;
+    if (_photoPath != null && _photoPath!.isNotEmpty && File(_photoPath!).existsSync()) {
+      headerImage = FileImage(File(_photoPath!));
+    } else if (widget.customer.imageBytes != null && widget.customer.imageBytes!.isNotEmpty) {
+      headerImage = MemoryImage(widget.customer.imageBytes!);
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F2),
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
+          /* ---------------- AppBar + Profile Image ---------------- */
           SliverAppBar(
             expandedHeight: 250,
             pinned: true,
@@ -137,17 +217,16 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // Customer Image or Placeholder
-                  widget.customer.imageBytes != null
-                      ? Image.memory(
-                          widget.customer.imageBytes!,
-                          fit: BoxFit.cover,
-                        )
-                      : Container(
-                          color: primaryColor.withOpacity(0.8),
-                          child: Icon(Icons.person, size: 120, color: Colors.white.withOpacity(0.6)),
-                        ),
-                  // Gradient Overlay
+                  if (headerImage != null)
+                    Image(
+                      image: headerImage,
+                      fit: BoxFit.cover,
+                    )
+                  else
+                    Container(
+                      color: primaryColor.withOpacity(0.8),
+                      child: Icon(Icons.person, size: 120, color: Colors.white.withOpacity(0.6)),
+                    ),
                   Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -159,11 +238,9 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                           Colors.transparent,
                           Colors.black.withOpacity(0.6),
                         ],
-                        stops: const [0.0, 0.5, 0.7, 1.0],
                       ),
                     ),
                   ),
-                  // 👉 Customer Name, Surname and Phone Number
                   Positioned(
                     bottom: 20,
                     left: 24,
@@ -227,7 +304,6 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
             ),
           ),
 
-          // 👉 Body content
           SliverList(
             delegate: SliverChildListDelegate(
               [
@@ -236,20 +312,26 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(30),
-                      topRight: Radius.circular(30),
-                    ),
+                        topLeft: Radius.circular(30), topRight: Radius.circular(30)),
                   ),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        const SizedBox(height: 24),
                         _buildSectionCard(
                           title: 'Description',
                           icon: Icons.info_outline,
                           iconColor: primaryColor,
-                          onTap: () {},
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => DescriptionPage(customer: widget.customer),
+                              ),
+                            );
+                          },
                         ),
                         const SizedBox(height: 16),
                         _buildSectionCard(
@@ -270,20 +352,25 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                           title: 'Family',
                           icon: Icons.family_restroom_outlined,
                           iconColor: primaryColor,
-                          onTap: () {},
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => FamilyPage(customer: widget.customer),
+                              ),
+                            );
+                          },
                         ),
                         const SizedBox(height: 32),
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 8.0),
-                          child: Text(
-                            'Notes',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black87,
-                            ),
+                        const Text(
+                          'Notes',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
                           ),
                         ),
+                        const SizedBox(height: 8),
                         GestureDetector(
                           onTap: _openNotesEditor,
                           child: NotesCard(notes: _savedNotes),
@@ -298,6 +385,19 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
           ),
         ],
       ),
+    );
+  }
+
+  void _openNotesEditor() {
+    _notesCtrl.text = _savedNotes;
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return _NotesEditorCard(
+          controller: _notesCtrl,
+          onSave: _saveNotes,
+        );
+      },
     );
   }
 
@@ -349,10 +449,6 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
   }
 }
 
-extension on model.Customer {
-  Null get surname => null;
-}
-
 class NotesCard extends StatelessWidget {
   final String notes;
   const NotesCard({super.key, required this.notes});
@@ -364,7 +460,7 @@ class NotesCard extends StatelessWidget {
       shadowColor: Colors.black12,
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        height: 250,
+        height: 200,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -374,11 +470,7 @@ class NotesCard extends StatelessWidget {
             ? const Center(
                 child: Text(
                   'Tap to add notes',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.black45,
-                  ),
+                  style: TextStyle(fontSize: 16, color: Colors.black45),
                 ),
               )
             : SingleChildScrollView(
@@ -395,11 +487,7 @@ class NotesCard extends StatelessWidget {
 class _NotesEditorCard extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onSave;
-
-  const _NotesEditorCard({
-    required this.controller,
-    required this.onSave,
-  });
+  const _NotesEditorCard({required this.controller, required this.onSave});
 
   @override
   State<_NotesEditorCard> createState() => _NotesEditorCardState();
@@ -434,20 +522,15 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: Colors.white,
-      contentPadding: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(24),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       content: Container(
         width: MediaQuery.of(context).size.width * 0.85,
-        height: 450,
+        height: 400,
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            const Text(
-              'Edit Notes',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 22, color: Colors.black87),
-            ),
+            const Text('Edit Notes',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
             const SizedBox(height: 16),
             Expanded(
               child: TextField(
@@ -455,39 +538,33 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
                 maxLines: null,
                 expands: true,
                 autofocus: true,
-                keyboardType: TextInputType.multiline,
                 decoration: InputDecoration(
                   hintText: 'Type your notes here...',
                   filled: true,
                   fillColor: Colors.grey.shade100,
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none),
                 ),
-                style: const TextStyle(fontSize: 16),
               ),
             ),
             const SizedBox(height: 16),
             Row(
               children: [
-                TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+                TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Cancel')),
                 const Spacer(),
-                if (widget.controller.text.isNotEmpty)
-                  TextButton(onPressed: () => widget.controller.clear(), child: const Text('Clear')),
-                const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: _changed ? widget.onSave : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF38B6E4),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    foregroundColor: Colors.white,
                   ),
-                  child: const Text('Save', style: TextStyle(fontSize: 16, color: Colors.white)),
+                  child: const Text('Save'),
                 ),
               ],
-            ),
+            )
           ],
         ),
       ),
