@@ -1,13 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:docapp/api/customerBus.dart';
 import 'package:docapp/descriptionpage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/familydetailspage.dart';
-import 'package:docapp/model/customermodel.dart' as model;
+import 'package:docapp/model/customer.dart' as model;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 class CustomerDetailPage extends StatefulWidget {
   final model.Customer customer;
@@ -25,8 +27,12 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
   @override
   void initState() {
     super.initState();
-    _loadNotes();
-    _photoPath = widget.customer.phone; // use photo path, not phone
+    _initAsync();
+  }
+
+  Future<void> _initAsync() async {
+    await _loadNotes();
+    await _persistApiImageIfNeeded(); // Save API image to local file (once)
   }
 
   @override
@@ -35,20 +41,192 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     super.dispose();
   }
 
-  /* ---------------- Load & Save Notes ---------------- */
+  Uint8List? _decodeDataUrl(String? s) {
+    if (s == null || s.isEmpty) return null;
+    if (!s.startsWith('data:image')) return null;
+    try {
+      final base64Part = s.split(',').last;
+      return base64Decode(base64.normalize(base64Part));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _extFromDataUrl(String s) {
+    // data:image/png;base64,...
+    final i = s.indexOf(';');
+    if (!s.startsWith('data:image') || i == -1) return null;
+    final mime = s.substring(5, i); // image/png
+    final parts = mime.split('/');
+    if (parts.length == 2) return parts.last.toLowerCase();
+    return null;
+  }
+
+  String _guessImageExt(Uint8List bytes) {
+    if (bytes.length >= 12) {
+      if (bytes[0] == 0x89 &&
+          bytes[1] == 0x50 &&
+          bytes[2] == 0x4E &&
+          bytes[3] == 0x47) return 'png';
+      if (bytes[0] == 0xFF && bytes[1] == 0xD8) return 'jpg';
+      if (bytes[0] == 0x47 &&
+          bytes[1] == 0x49 &&
+          bytes[2] == 0x46 &&
+          bytes[3] == 0x38) return 'gif';
+      if (bytes[0] == 0x52 &&
+          bytes[1] == 0x49 &&
+          bytes[2] == 0x46 &&
+          bytes[3] == 0x46 &&
+          bytes[8] == 0x57 &&
+          bytes[9] == 0x45 &&
+          bytes[10] == 0x42 &&
+          bytes[11] == 0x50) return 'webp';
+    }
+    return 'jpg';
+  }
+
+  Future<Uint8List?> _downloadImage(String url) async {
+    try {
+      final uri = Uri.parse(url);
+      final client = HttpClient();
+      try {
+        final req = await client.getUrl(uri);
+        final resp = await req.close();
+        if (resp.statusCode == 200) {
+          final builder = BytesBuilder();
+          await for (final chunk in resp) {
+            builder.add(chunk);
+          }
+          return builder.takeBytes();
+        }
+      } finally {
+        client.close(force: true);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _persistApiImageIfNeeded() async {
+    // If already have a saved local photo path, do nothing.
+    if (_photoPath != null && _photoPath!.isNotEmpty) return;
+
+    Uint8List? bytes;
+    String? ext;
+
+    // 1) From Customer.imageBytes
+    if (widget.customer.imageBytes != null &&
+        widget.customer.imageBytes!.isNotEmpty) {
+      bytes = widget.customer.imageBytes!;
+      ext = _guessImageExt(bytes);
+    } else {
+      // 2) From 'others' (data URL or http/https URL)
+      final others = widget.customer.others;
+      if (others is String && others.isNotEmpty) {
+        if (others.startsWith('data:image')) {
+          bytes = _decodeDataUrl(others);
+          ext = _extFromDataUrl(others) ?? (bytes != null ? _guessImageExt(bytes) : 'jpg');
+        } else if (others.startsWith('http://') ||
+            others.startsWith('https://')) {
+          bytes = await _downloadImage(others);
+          if (bytes != null) {
+            ext = _guessImageExt(bytes);
+          }
+        }
+      }
+    }
+
+    // Nothing to persist
+    if (bytes == null || bytes.isEmpty) return;
+
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final safePhone = widget.customer.phone.replaceAll(RegExp(r'[^0-9A-Za-z]+'), '_');
+      final filePath =
+          '${dir.path}/cust_${safePhone}_${DateTime.now().millisecondsSinceEpoch}.${ext ?? 'jpg'}';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
+      // Update prefs and broadcast
+      await _upsertLocalPhoto(filePath);
+
+      if (!mounted) return;
+      setState(() {
+        _photoPath = filePath;
+      });
+    } catch (_) {
+      // best effort
+    }
+  }
+
+  Future<void> _upsertLocalPhoto(String path) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1) Update customers list
+    List<dynamic> customersList = [];
+    final customersJson = prefs.getString('customers');
+    if (customersJson != null && customersJson.isNotEmpty) {
+      try {
+        customersList = jsonDecode(customersJson);
+      } catch (_) {
+        customersList = [];
+      }
+    }
+    final idx = customersList.indexWhere(
+      (c) => (c is Map) && c['phone'] == widget.customer.phone,
+    );
+    Map<String, dynamic> updatedMap;
+    if (idx >= 0) {
+      updatedMap = {
+        ...Map<String, dynamic>.from(customersList[idx]),
+        'photo': path,
+      };
+      customersList[idx] = updatedMap;
+    } else {
+      updatedMap = {
+        'name': widget.customer.name,
+        'surname': widget.customer.surname,
+        'phone': widget.customer.phone,
+        'photo': path,
+        'notes': _savedNotes,
+      };
+      customersList.add(updatedMap);
+    }
+    await prefs.setString('customers', jsonEncode(customersList));
+
+    // 2) Sync last_user if same customer
+    final lastUserJson = prefs.getString('last_user');
+    if (lastUserJson != null && lastUserJson.isNotEmpty) {
+      try {
+        final last = jsonDecode(lastUserJson) as Map<String, dynamic>;
+        if (last['phone'] == widget.customer.phone) {
+          final updatedLast = {...last, 'photo': path};
+          await prefs.setString('last_user', jsonEncode(updatedLast));
+        }
+      } catch (_) {}
+    }
+
+    // 3) Broadcast to other pages
+    try {
+      CustomerBus.notify(model.Customer.fromMap(updatedMap));
+    } catch (_) {}
+  }
+
   Future<void> _loadNotes() async {
     final prefs = await SharedPreferences.getInstance();
     final String? customersJson = prefs.getString('customers');
     if (customersJson != null && customersJson.isNotEmpty) {
       try {
         final List<dynamic> customersList = json.decode(customersJson);
-        final Map<String, dynamic> customerData = customersList.cast<Map>().map((e) => Map<String, dynamic>.from(e)).firstWhere(
-          (c) => c['phone'] == widget.customer.phone,
-          orElse: () => {},
-        );
-        if (customerData.isNotEmpty && mounted) {
+        Map<String, dynamic>? customerData;
+        for (final item in customersList) {
+          if (item is Map && item['phone'] == widget.customer.phone) {
+            customerData = Map<String, dynamic>.from(item);
+            break;
+          }
+        }
+        if (customerData != null && mounted) {
           setState(() {
-            _savedNotes = (customerData['notes'] ?? '').toString();
+            _savedNotes = (customerData!['notes'] ?? '').toString();
             _photoPath = (customerData['photo'] ?? _photoPath)?.toString();
           });
         }
@@ -71,7 +249,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     }
 
     Map<String, dynamic> updatedMap;
-    final idx = customersList.indexWhere((c) => (c is Map) && c['phone'] == widget.customer.phone);
+    final idx = customersList.indexWhere(
+        (c) => (c is Map) && c['phone'] == widget.customer.phone);
     if (idx >= 0) {
       updatedMap = {
         ...Map<String, dynamic>.from(customersList[idx]),
@@ -116,67 +295,31 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     CustomerBus.notify(updatedCustomer);
   }
 
-  /* ---------------- Image update logic ---------------- */
-  Future<void> _updateImage() async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile == null) return;
-
-    final prefs = await SharedPreferences.getInstance();
-
-    // 1) Update customers list
-    List<dynamic> customersList = [];
-    final customersJson = prefs.getString('customers');
-    if (customersJson != null && customersJson.isNotEmpty) {
-      try {
-        customersList = jsonDecode(customersJson);
-      } catch (_) {
-        customersList = [];
-      }
-    }
-
-    final idx = customersList.indexWhere((c) => (c is Map) && c['phone'] == widget.customer.phone);
-    Map<String, dynamic> updatedMap;
-    if (idx >= 0) {
-      updatedMap = {
-        ...Map<String, dynamic>.from(customersList[idx]),
-        'photo': pickedFile.path,
-      };
-      customersList[idx] = updatedMap;
-    } else {
-      updatedMap = {
-        'name': widget.customer.name,
-        'surname': widget.customer.surname,
-        'phone': widget.customer.phone,
-        'photo': pickedFile.path,
-        'notes': _savedNotes,
-      };
-      customersList.add(updatedMap);
-    }
-    await prefs.setString('customers', jsonEncode(customersList));
-
-    // 2) Update last_user if same customer
-    final lastUserJson = prefs.getString('last_user');
-    if (lastUserJson != null && lastUserJson.isNotEmpty) {
-      try {
-        final last = jsonDecode(lastUserJson) as Map<String, dynamic>;
-        if (last['phone'] == widget.customer.phone) {
-          final updatedLast = {...last, 'photo': pickedFile.path};
-          await prefs.setString('last_user', jsonEncode(updatedLast));
-        }
-      } catch (_) {}
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final primaryColor = const Color(0xFF38B6E4);
 
     ImageProvider? headerImage;
-    if (_photoPath != null && _photoPath!.isNotEmpty && File(_photoPath!).existsSync()) {
+
+    // Prefer local file if available (we persist API image once)
+    if (_photoPath != null &&
+        _photoPath!.isNotEmpty &&
+        File(_photoPath!).existsSync()) {
       headerImage = FileImage(File(_photoPath!));
-    } else if (widget.customer.imageBytes != null && widget.customer.imageBytes!.isNotEmpty) {
+    }
+
+    // Fallbacks
+    if (headerImage == null &&
+        widget.customer.imageBytes != null &&
+        widget.customer.imageBytes!.isNotEmpty) {
       headerImage = MemoryImage(widget.customer.imageBytes!);
+    }
+
+    if (headerImage == null && widget.customer.others is String) {
+      final by = _decodeDataUrl(widget.customer.others as String);
+      if (by != null && by.isNotEmpty) {
+        headerImage = MemoryImage(by);
+      }
     }
 
     return Scaffold(
@@ -184,7 +327,6 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          /* ---------------- AppBar + Profile Image ---------------- */
           SliverAppBar(
             expandedHeight: 250,
             pinned: true,
@@ -376,6 +518,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                           child: NotesCard(notes: _savedNotes),
                         ),
                         const SizedBox(height: 20),
+                        // Upload/Change Photo button removed as requested
                       ],
                     ),
                   ),

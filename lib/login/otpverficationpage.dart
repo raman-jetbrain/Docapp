@@ -56,7 +56,6 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
         return;
       }
 
-      // ✅ Body exactly as API spec requires
       final body = {
         "Token": loginToken,
         "OTP": otp,

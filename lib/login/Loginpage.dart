@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:docapp/api/api_constant.dart';
-import 'package:docapp/otpverficationpage.dart';
+import 'package:docapp/login/otpverficationpage.dart';
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;

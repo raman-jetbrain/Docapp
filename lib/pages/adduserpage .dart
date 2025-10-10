@@ -1,15 +1,64 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:docapp/api/api_constant.dart';
-import 'package:docapp/model/customermodel.dart';
+import 'package:docapp/model/customer.dart';
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
+String? _extractServerError(String body) {
+  try {
+    final decoded = jsonDecode(body);
+    if (decoded is Map<String, dynamic>) {
+      if (decoded['message'] is String) return decoded['message'] as String;
+      if (decoded['error'] is String) return decoded['error'] as String;
+      if (decoded['errors'] is Map) {
+        final errors = decoded['errors'] as Map;
+        final lines = <String>[];
+        for (final entry in errors.entries) {
+          final key = entry.key;
+          final val = entry.value;
+          if (val is List && val.isNotEmpty) {
+            lines.add("$key: ${val.join(', ')}");
+          } else if (val is String) {
+            lines.add("$key: $val");
+          }
+        }
+        if (lines.isNotEmpty) return lines.join('\n');
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+int? _toInt(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is double) return v.toInt();
+  return int.tryParse(v.toString());
+}
+
+Map<String, dynamic> _unwrapApiPayload(dynamic raw) {
+  if (raw is Map<String, dynamic>) {
+    final r = raw['Response'];
+    if (r is Map<String, dynamic>) return r;
+    if (r is List && r.isNotEmpty && r.first is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(r.first as Map);
+    }
+    return raw;
+  }
+  if (raw is List && raw.isNotEmpty && raw.first is Map<String, dynamic>) {
+    return Map<String, dynamic>.from(raw.first as Map);
+  }
+  return {};
+}
+
 class AddNewUserPage extends StatefulWidget {
-  const AddNewUserPage({super.key,});
+  const AddNewUserPage({super.key});
 
   @override
   State<AddNewUserPage> createState() => _AddNewUserPageState();
@@ -19,10 +68,11 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
   static const Color kPrimaryBlue = Color(0xFF38B6E4);
   static const double kScreenPadding = 18;
 
-  // Read from ApiConstants (with or without /api)
+  static const int kMaxImageDimension = 1024;
+  static const int kPngLevel = 6;
+
   static String get _apiBaseUrl => ApiConstants.baseUrl;
 
-  // Normalize base URL so '/api' exists only once and no trailing slash.
   String get _apiBaseNormalized {
     var b = _apiBaseUrl.trim();
     if (b.endsWith('/')) b = b.substring(0, b.length - 1);
@@ -81,9 +131,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
   Future<void> _pickImage() async {
     final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() => _imageFile = File(pickedFile.path));
-    }
+    if (pickedFile != null) setState(() => _imageFile = File(pickedFile.path));
   }
 
   Future<void> _pickDate() async {
@@ -135,19 +183,15 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
     if (result == true) {
       setState(() {
-        _customEntries.add({
-          "type": typeController.text.trim(),
-          "detail": detailController.text.trim(),
-        });
+        _customEntries.add({"type": typeController.text.trim(), "detail": detailController.text.trim()});
       });
       await _saveCustomEntries();
     }
   }
 
-  // Returns ISO-8601 UTC string: "2025-09-24T12:14:07.978Z"
   String? _dobIso8601Z() {
     if (_selectedDate == null) return null;
-    final dt = DateTime(_selectedDate!.year, _selectedDate!.month, _selectedDate!.day, 12, 0, 0);
+    final dt = DateTime(_selectedDate!.year, _selectedDate!.month, _selectedDate!.day);
     return dt.toUtc().toIso8601String();
   }
 
@@ -165,50 +209,209 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         .join(" | ");
   }
 
-  Map<String, dynamic> _buildHttpFileData() {
-    // Default shape if no file is picked
-    Map<String, dynamic> data = {
-      "StatusCode": 100,
-      "Message": "done",
-      "FileName": "",
-      "FileType": "",
-      "FileData": "",
-    };
-
-    if (_imageFile == null) return data;
-
+  // Convert to PNG (consistent FileType/image content)
+  Future<Uint8List?> _compressToPng(File file) async {
     try {
-      final bytes = _imageFile!.readAsBytesSync();
-      final b64 = base64Encode(bytes);
+      final bytes = await file.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return null;
+
+      img.Image processed = decoded;
+      final w = decoded.width;
+      final h = decoded.height;
+      const maxDim = kMaxImageDimension;
+      if (w > maxDim || h > maxDim) {
+        final scale = (w > h) ? maxDim / w : maxDim / h;
+        final newW = (w * scale).round();
+        final newH = (h * scale).round();
+        processed = img.copyResize(decoded, width: newW, height: newH, interpolation: img.Interpolation.cubic);
+      }
+
+      final png = img.encodePng(processed, level: kPngLevel);
+      return Uint8List.fromList(png);
+    } catch (e) {
+      debugPrint('[PNG] Compression failed: $e');
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> _buildHttpFileData() async {
+    if (_imageFile == null) return null;
+    try {
+      final pngBytes = await _compressToPng(_imageFile!);
+      if (pngBytes == null || pngBytes.isEmpty) return null;
+      final b64 = base64Encode(pngBytes);
 
       final path = _imageFile!.path;
       final fileNameOnly = path.split(Platform.pathSeparator).last;
       final dot = fileNameOnly.lastIndexOf('.');
-      final nameNoExt = dot > 0 ? fileNameOnly.substring(0, dot) : fileNameOnly;
-      final ext = dot > 0 ? fileNameOnly.substring(dot + 1) : "";
+      final baseName = dot > 0 ? fileNameOnly.substring(0, dot) : fileNameOnly;
 
-      data = {
-        "StatusCode": 100,
-        "Message": "done",
-        "FileName": nameNoExt.isNotEmpty ? nameNoExt : "file",
-        "FileType": ext.isNotEmpty ? ext : "image",
-        "FileData": b64, // If backend expects text (e.g., Aadhaar), replace with that string
+      return {
+        "IsModified": false,
+        "FileData": b64,            // actual image base64 (no data URL prefix)
+        "FileName": "$baseName.png",
+        "FileType": "image/png",
+        "Remarks": "",
+        "IsDeleted": false,
       };
-    } catch (_) {
-      // Keep default if any error
+    } catch (e) {
+      debugPrint('[PNG] Build HttpFileData error: $e');
+      return null;
     }
-    return data;
   }
 
-  // ---------- Local auto-increment ID helpers ----------
-  int? _toInt(dynamic v) {
-    if (v == null) return null;
-    if (v is int) return v;
-    if (v is String) return int.tryParse(v);
-    if (v is double) return v.toInt();
-    return null;
+  // ===== Unique counters (previous + 1) =====
+  Future<int> _takeNextCustomerId() async {
+    final prefs = await SharedPreferences.getInstance();
+    int current = prefs.getInt('next_server_customer_id') ?? 0;
+    if (current == 0) {
+      int maxId = 0;
+      final existing = prefs.getString('customers');
+      if (existing != null) {
+        try {
+          final List<dynamic> list = json.decode(existing);
+          for (final item in list) {
+            if (item is Map) {
+              final m = Map<String, dynamic>.from(item);
+              for (final key in ['serverId', 'id', 'Id']) {
+                final v = _toInt(m[key]);
+                if (v != null && v > maxId) maxId = v;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      current = maxId;
+    }
+    final next = current + 1;
+    await prefs.setInt('next_server_customer_id', next);
+    return next;
   }
 
+  Future<int> _takeNextFileId() async {
+    final prefs = await SharedPreferences.getInstance();
+    int current = prefs.getInt('next_server_file_id') ?? 0;
+    if (current == 0) {
+      int maxId = 0;
+      final existing = prefs.getString('customers');
+      if (existing != null) {
+        try {
+          final List<dynamic> list = json.decode(existing);
+          for (final item in list) {
+            if (item is Map) {
+              final m = Map<String, dynamic>.from(item);
+              final v = _toInt(m['fileId']);
+              if (v != null && v > maxId) maxId = v;
+              if (m['HttpFileData'] is Map) {
+                final fid = _toInt((m['HttpFileData'] as Map)['Id']);
+                if (fid != null && fid > maxId) maxId = fid;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      current = maxId;
+    }
+    final next = current + 1;
+    await prefs.setInt('next_server_file_id', next);
+    return next;
+  }
+
+  Future<void> _ensureCounterAtLeast(String key, int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    final curr = prefs.getInt(key) ?? 0;
+    if (curr < value) await prefs.setInt(key, value);
+  }
+
+  // ---- POST call ----
+  Future<Map<String, dynamic>> _createCustomerOnServerExactPayload({
+    required String name,
+    required String surname,
+    required String phoneNumber,
+    required String emailId,
+    required String address,
+    required String gender,
+    required String others,
+    required String? dobIsoZ,
+    required int id,
+    int? fileId,
+    Map<String, dynamic>? httpFileData,
+  }) async {
+    final token = await TokenStorage.getToken();
+
+    final hasImage = (httpFileData != null) && (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
+
+    // IMPORTANT: push FileData and provide Id/FileId INSIDE HttpFileData
+    final httpFilePayload = hasImage
+        ? {
+            if (fileId != null) "Id": fileId,
+            if (fileId != null) "FileId": fileId,
+            "IsModified": true,
+            "FileData": httpFileData["FileData"] ?? "",
+            "FileName": (httpFileData["FileName"] ?? "Profile_Image.png").toString(),
+            "FileType": (httpFileData["FileType"] ?? "image/png").toString(),
+            "Remarks": (httpFileData["Remarks"] ?? "").toString(),
+            "IsDeleted": false,
+          }
+        : null;
+
+    final payload = <String, dynamic>{
+      "Id": id,
+      "Name": name,
+      "Surname": surname,
+      "PhoneNumber": phoneNumber,
+      "FileId": hasImage ? fileId : null, // top-level linkage
+      "EmailId": emailId,
+      "Address": address,
+      "Gender": gender.toLowerCase(),
+      "Others": others,
+      "DOB": dobIsoZ ?? DateTime.now().toUtc().toIso8601String(),
+      "SDOB": dobIsoZ ?? DateTime.now().toUtc().toIso8601String(),
+      "HttpFileData": httpFilePayload,
+    };
+
+    debugPrint('[Add] Using customerId=$id, fileId=${hasImage ? fileId : null}');
+
+    final headers = <String, String>{
+      "Content-Type": "application/json; charset=utf-8",
+      "Accept": "application/json",
+      if (token != null && token.isNotEmpty) "Authorization": "Bearer $token",
+    };
+
+    final url = '$_apiBaseNormalized/CustomerDataM/AddAsync';
+    try {
+      // Safe log (mask base64)
+      final safePayload = Map<String, dynamic>.from(payload);
+      if (safePayload['HttpFileData'] is Map) {
+        final fd = Map<String, dynamic>.from(safePayload['HttpFileData'] as Map);
+        final b64 = (fd['FileData'] as String?);
+        fd['FileData'] = b64 == null ? "" : "<base64:${(b64.length / 1024).toStringAsFixed(1)}KB>";
+        safePayload['HttpFileData'] = fd;
+      }
+      debugPrint('[Add] POST $url');
+      debugPrint('[Add] Payload (safe): ${jsonEncode(safePayload)}');
+
+      final res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(payload));
+      debugPrint('[Add] <- ${res.statusCode}');
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        if (res.body.trim().isEmpty) return {};
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map<String, dynamic>) return decoded;
+        if (decoded is List && decoded.isNotEmpty && decoded.first is Map<String, dynamic>) {
+          return decoded.first as Map<String, dynamic>;
+        }
+        return {};
+      }
+      final msg = _extractServerError(res.body) ?? 'Server error ${res.statusCode}';
+      throw Exception(msg);
+    } catch (e) {
+      debugPrint('[Add] POST failed: $e');
+      rethrow;
+    }
+  }
+
+  // Local-only id for cache (not for images)
   Future<int> _peekNextLocalCustomerId() async {
     final prefs = await SharedPreferences.getInstance();
     int? nextId = prefs.getInt('next_local_customer_id');
@@ -222,9 +425,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         for (final item in list) {
           if (item is Map) {
             final local = _toInt(item['localId']);
-            final server = _toInt(item['serverId']);
             if (local != null && local > maxId) maxId = local;
-            if (server != null && server > maxId) maxId = server;
           }
         }
       } catch (_) {}
@@ -242,131 +443,46 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     await prefs.setInt('next_local_customer_id', next);
   }
 
-  // EXACT payload with endpoint fallback and logging; returns on first 2xx.
-  Future<Map<String, dynamic>> _createCustomerOnServerExactPayload({
-    required String name,
-    required String surname,
-    required String phoneNumber,
-    required String emailId,
-    required String address,
-    required String gender, // lowercased later
-    required String others, // string
-    required String? dobIsoZ,
-    required int id,
-    required int fileId,
-    required Map<String, dynamic> httpFileData,
-  }) async {
-    final token = await TokenStorage.getToken();
-
-    final payload = <String, dynamic>{
-      "Id": id, // If your backend needs 0 for create, set it here
-      "Name": name,
-      "Surname": surname,
-      "PhoneNumber": phoneNumber,
-      "FileId": fileId, // Use positive ID if backend validates it
-      "EmailId": emailId,
-      "Address": address,
-      "Gender": gender.toLowerCase(),
-      "Others": others,
-      "DOB": dobIsoZ ?? DateTime.now().toUtc().toIso8601String(),
-      "SDOB": dobIsoZ ?? DateTime.now().toUtc().toIso8601String(),
-      "HttpFileData": httpFileData,
-    };
-
-    final headers = <String, String>{
-      "Content-Type": "application/json; charset=utf-8",
-      "Accept": "application/json",
-      if (token != null && token.isNotEmpty) "Authorization": "Bearer $token",
-    };
-    
-    // Try likely routes in order and stop on first 2xx
-    final candidates = <String>[
-      '$_apiBaseNormalized/CustomerDataM',              // RESTful POST
-      '$_apiBaseNormalized/CustomerDataM/AddAsync',     // action-based route
-      '$_apiBaseNormalized/customerDataM',
-      '$_apiBaseNormalized/customerDataM/AddAsync',
-    ];
-
-    http.Response? last;
-    for (final url in candidates) {
-      try {
-        debugPrint('[Add] POST $url');
-        debugPrint('[Add] Payload: ${jsonEncode(payload)}');
-
-        final res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(payload));
-        debugPrint('[Add] <- ${res.statusCode} ${res.body}');
-
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          debugPrint('[Add] SUCCESS: ${res.statusCode} for $url'); // Will print 200 on success
-          final body = res.body.trim();
-          if (body.isEmpty) return {};
-          final decoded = jsonDecode(body);
-          if (decoded is Map<String, dynamic>) return decoded;
-          if (decoded is List && decoded.isNotEmpty && decoded.first is Map<String, dynamic>) {
-            return decoded.first as Map<String, dynamic>;
-          }
-          return {};
-        }
-
-        last = res;
-        if (res.statusCode == 404) {
-          debugPrint('[Add] 404 at $url, trying next candidate...');
-          continue;
-        } else {
-          final msg = _extractServerError(res.body) ?? 'Server error ${res.statusCode}';
-          throw Exception(msg);
-        }
-      } catch (e) {
-        debugPrint('[Add] POST failed for $url: $e');
-        // Try next candidate
-      }
-    }
-
-    if (last != null) {
-      final msg = _extractServerError(last.body) ?? 'Server error ${last.statusCode}';
-      throw Exception(msg);
-    }
-    throw Exception('No reachable Add endpoint (all candidates failed)');
+  // ====== Duplicate phone checking ======
+  String _digitsOnly(String s) => s.replaceAll(RegExp(r'\D'), '');
+  Set<String> _phoneKeysForMatch(String s) {
+    final d = _digitsOnly(s);
+    final set = <String>{};
+    if (d.isEmpty) return set;
+    set.add(d);
+    if (d.length >= 10) set.add(d.substring(d.length - 10));
+    return set;
   }
 
-  // Optional GET tester
-  Future<void> debugFetchCustomers() async {
-    final url = '$_apiBaseNormalized/CustomerDataM/GetAsync';
-    final token = await TokenStorage.getToken();
-    final res = await http.get(
-      Uri.parse(url),
-      headers: {
-        "Accept": "application/json",
-        if (token != null && token.isNotEmpty) "Authorization": "Bearer $token",
-      },
-    );
-    debugPrint("GET $url -> ${res.statusCode}");
-    debugPrint(res.body);
-  }
+  Future<bool> _isDuplicatePhoneLocal(String rawPhone) async {
+    final keysToCheck = _phoneKeysForMatch(rawPhone);
+    if (keysToCheck.isEmpty) return false;
 
-  String? _extractServerError(String body) {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString('customers');
+    if (existing == null) return false;
+
     try {
-      final decoded = jsonDecode(body);
-      if (decoded is Map<String, dynamic>) {
-        if (decoded['message'] is String) return decoded['message'] as String;
-        if (decoded['error'] is String) return decoded['error'] as String;
-        if (decoded['errors'] is Map) {
-          final errors = decoded['errors'] as Map;
-          final lines = <String>[];
-          for (final entry in errors.entries) {
-            final key = entry.key;
-            final val = entry.value;
-            if (val is List && val.isNotEmpty) {
-              lines.add("$key: ${val.join(', ')}");
-            } else if (val is String) {
-              lines.add("$key: $val");
+      final List<dynamic> list = json.decode(existing);
+      for (final item in list) {
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(item);
+          final candidates = [
+            m['phone'],
+            m['Phone'],
+            m['phoneNumber'],
+            m['PhoneNumber'],
+          ].whereType<String>();
+          for (final ph in candidates) {
+            final ks = _phoneKeysForMatch(ph);
+            for (final k in ks) {
+              if (keysToCheck.contains(k)) return true;
             }
           }
-          if (lines.isNotEmpty) return lines.join('\n');
         }
       }
     } catch (_) {}
-    return null;
+    return false;
   }
 
   Future<void> _submit() async {
@@ -374,51 +490,98 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Name is required")));
       return;
     }
+    if (_phoneController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Phone No is required")));
+      return;
+    }
 
     FocusScope.of(context).unfocus();
     setState(() => _isSubmitting = true);
 
     try {
-      final localId = await _peekNextLocalCustomerId();
+      final phoneRaw = _phoneController.text.trim();
 
-      // Build exact payload parts
+      // Quick local duplicate check
+      if (await _isDuplicatePhoneLocal(phoneRaw)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("This mobile number already exists locally. Please use a different number.")),
+        );
+        return;
+      }
+
+      // Generate ids
+      final localId = await _peekNextLocalCustomerId();
+      final generatedCustomerId = await _takeNextCustomerId();
+
+      final httpFileData = await _buildHttpFileData();
+      final hasImage = httpFileData != null && (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
+      final generatedFileId = hasImage ? await _takeNextFileId() : null;
+
       final dobIsoZ = _dobIso8601Z();
       final others = _othersAsString();
-      final httpFileData = _buildHttpFileData();
 
+      // Send to API (image in HttpFileData; Id/FileId included)
       final serverResponse = await _createCustomerOnServerExactPayload(
-        id: localId, // If server needs 0, change here
+        id: generatedCustomerId,
         name: _nameController.text.trim(),
         surname: _surnameController.text.trim(),
-        phoneNumber: _phoneController.text.trim(),
+        phoneNumber: phoneRaw,
         emailId: _emailController.text.trim(),
         address: _addressController.text.trim(),
         gender: _gender?.trim() ?? "",
         others: others,
         dobIsoZ: dobIsoZ,
-        fileId: 1, // Use positive id if backend validates this
-        httpFileData: httpFileData,
+        fileId: generatedFileId,
+        httpFileData: httpFileData != null
+            ? {
+                ...httpFileData,
+                "FileType": "image/png",
+              }
+            : null,
       );
 
-      // Cache locally
-      final bytes = _imageFile != null ? await _imageFile!.readAsBytes() : null;
-      final imageB64 = bytes != null ? base64Encode(bytes) : null;
+      final created = _unwrapApiPayload(serverResponse);
+      final serverId =
+          _toInt(created['Id'] ?? created['CustomerDataMId'] ?? created['CustomerId'] ?? created['CustomerDataId']) ??
+          generatedCustomerId;
 
+      final fileId = _toInt(
+            created['FileId'] ??
+                (created['HttpFileData'] is Map
+                    ? (created['HttpFileData']['Id'] ?? created['HttpFileData']['FileId'])
+                    : null),
+          ) ??
+          (hasImage ? generatedFileId : null);
+
+      await _ensureCounterAtLeast('next_server_customer_id', serverId);
+      if (fileId != null) await _ensureCounterAtLeast('next_server_file_id', fileId);
+
+      // For immediate UI only (do NOT persist image)
+      Uint8List? immediateBytes;
+      final fdStr = (httpFileData?['FileData'] as String?);
+      if (fdStr != null && fdStr.isNotEmpty) {
+        try {
+          immediateBytes = base64Decode(fdStr);
+        } catch (_) {}
+      }
+
+      // Build local cache map WITHOUT image and WITHOUT photo path
       final newCustomerMap = {
         "localId": localId,
         "name": _nameController.text.trim(),
         "surname": _surnameController.text.trim(),
-        "phone": _phoneController.text.trim(),
+        "phone": phoneRaw,
         "address": _addressController.text.trim(),
         "email": _emailController.text.trim(),
         "dob": _dobController.text.trim(),
         "gender": (_gender ?? "").toLowerCase(),
         "customEntries": _customEntries,
-        "serverId": serverResponse['Id'] ?? serverResponse['id'],
-        "photo": _imageFile?.path ?? "",
-        if (imageB64 != null) "imageBytes": imageB64,
+        "serverId": serverId,
+        "fileId": fileId, // link for future fetches (no image persisted)
       };
 
+      // Persist only lightweight info (no image in local storage)
       final prefs = await SharedPreferences.getInstance();
       final existing = prefs.getString('customers');
       final List<dynamic> list = existing != null ? json.decode(existing) : [];
@@ -430,28 +593,34 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
       if (!mounted) return;
 
-      Navigator.pop(
+      // Return customer with in-memory imageBytes for immediate UI
+      Navigator.pop<Map<String, dynamic>>(
         context,
-        Customer(
-          name: newCustomerMap['name'] as String,
-          surname: newCustomerMap['surname'] as String,
-          phone: newCustomerMap['phone'] as String,
-          email: newCustomerMap['email'] as String,
-          address: newCustomerMap['address'] as String,
-          dob: newCustomerMap['dob'] as String,
-          gender: newCustomerMap['gender'] as String,
-          customEntries: (newCustomerMap['customEntries'] as List<dynamic>)
-              .map<Map<String, String>>((e) => Map<String, String>.from(e))
-              .toList(),
-          photo: newCustomerMap['photo'] as String?,
-          imageBytes: bytes,
-        ),
+        {
+          'customer': Customer(
+            name: newCustomerMap['name'] as String,
+            surname: newCustomerMap['surname'] as String,
+            phone: newCustomerMap['phone'] as String,
+            email: newCustomerMap['email'] as String,
+            address: newCustomerMap['address'] as String,
+            dob: newCustomerMap['dob'] as String,
+            gender: newCustomerMap['gender'] as String,
+            customEntries: (newCustomerMap['customEntries'] as List<dynamic>)
+                .map<Map<String, String>>((e) => Map<String, String>.from(e))
+                .toList(),
+            photo: null,                  // don't pass local file path
+            imageBytes: immediateBytes,   // in-memory only
+            serverId: serverId.toString(),
+            fileId: fileId,
+          ),
+          'serverId': serverId,
+          'fileId': fileId,
+          'raw': created,
+        },
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Submit failed: $e")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Submit failed: $e")));
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -476,10 +645,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
             flexibleSpace: FlexibleSpaceBar(
               background: Container(
                 decoration: const BoxDecoration(
-                  image: DecorationImage(
-                    image: AssetImage("assets/images/Background2.jpeg"),
-                    fit: BoxFit.cover,
-                  ),
+                  image: DecorationImage(image: AssetImage("assets/images/Background2.jpeg"), fit: BoxFit.cover),
                 ),
                 child: Padding(
                   padding: EdgeInsets.symmetric(horizontal: kScreenPadding),
@@ -530,15 +696,16 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                     const Divider(color: Colors.black12),
                     TextField(controller: _emailController, decoration: _inputDecoration("Email")),
                     const Divider(color: Colors.black12),
-                    TextField(controller: _phoneController, decoration: _inputDecoration("Phone No")),
+                    TextField(
+                      controller: _phoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: _inputDecoration("Phone No"),
+                    ),
                     const Divider(color: Colors.black12),
                     TextField(controller: _addressController, decoration: _inputDecoration("Address")),
                     const Divider(color: Colors.black12),
                     const SizedBox(height: 20),
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text("Gender", style: TextStyle(color: Colors.grey)),
-                    ),
+                    const Align(alignment: Alignment.centerLeft, child: Text("Gender", style: TextStyle(color: Colors.grey))),
                     Row(
                       children: ["Male", "Female", "Other"].map((g) {
                         return Expanded(
@@ -587,9 +754,9 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                       ),
                   ],
                 ),
-              )
+              ),
             ]),
-          )
+          ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -597,10 +764,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            image: const DecorationImage(
-              image: AssetImage("assets/images/Background2.jpeg"),
-              fit: BoxFit.cover,
-            ),
+            image: const DecorationImage(image: AssetImage("assets/images/Background2.jpeg"), fit: BoxFit.cover),
           ),
           child: ElevatedButton(
             onPressed: _isSubmitting ? null : _submit,

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:docapp/model/DocumentsItem.dart' show DocumentItem;
-import 'package:docapp/model/customermodel.dart' as model;
+import 'package:docapp/model/customer.dart' as model;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;

@@ -1,5 +1,5 @@
+import 'package:docapp/model/customer.dart' as model;
 import 'package:flutter/foundation.dart';
-import 'package:docapp/model/customermodel.dart' as model;
 
 class CustomerBus {
   static final ValueNotifier<model.Customer?> changed = ValueNotifier<model.Customer?>(null);

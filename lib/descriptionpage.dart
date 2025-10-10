@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:docapp/api/api_constant.dart';
-import 'package:docapp/model/customermodel.dart';
+import 'package:docapp/model/customer.dart';
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -215,8 +215,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
         .toList();
 
     final g = (c.gender ?? '').trim().toLowerCase();
-    if (g.startsWith('m')) _gender = 'Male';
-    else if (g.startsWith('f')) _gender = 'Female';
+    if (g.startsWith('m')) {
+      _gender = 'Male';
+    } else if (g.startsWith('f')) _gender = 'Female';
     else if (g.isEmpty) _gender = null;
     else _gender = 'Other';
 

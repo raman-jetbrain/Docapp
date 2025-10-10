@@ -1,10 +1,10 @@
 import 'dart:convert';
+import 'package:docapp/model/customer.dart' as model;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:docapp/model/customermodel.dart' as model;
-import 'package:docapp/customerdetailpage.dart';
+import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/documentspage.dart';
-import 'package:docapp/adduserpage%20.dart';
+import 'package:docapp/pages/adduserpage%20.dart';
 
 class FamilyPage extends StatefulWidget {
   final model.Customer customer; // parent
