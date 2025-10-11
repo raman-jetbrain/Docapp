@@ -278,4 +278,13 @@ class CustomerApiService {
     }
     return null;
   }
+
+  Future<model.Customer?> getCustomerByPhone(String s) async {
+    return null;
+  }
+
+  Future<model.Customer?> getCustomerById(String s) async {
+    return null;
+  }
 }
+

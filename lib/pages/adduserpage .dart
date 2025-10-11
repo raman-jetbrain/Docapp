@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:docapp/api/api_constant.dart';
-import 'package:docapp/model/customer.dart';
+import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
@@ -58,7 +58,13 @@ Map<String, dynamic> _unwrapApiPayload(dynamic raw) {
 }
 
 class AddNewUserPage extends StatefulWidget {
-  const AddNewUserPage({super.key});
+  // Pass parentServerId when adding a child under a parent.
+  // Parent: parentServerId = null => ParentCustomerDataId will be null
+  // Child:  parentServerId != null => ParentCustomerDataId = parentServerId
+  final int? parentServerId;
+  final String? parentDisplay;
+
+  const AddNewUserPage({super.key, this.parentServerId, this.parentDisplay});
 
   @override
   State<AddNewUserPage> createState() => _AddNewUserPageState();
@@ -95,10 +101,14 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
   List<Map<String, String>> _customEntries = [];
 
   bool _isSubmitting = false;
+  int? _parentServerId;
+
+  bool get _isAddingChild => _parentServerId != null;
 
   @override
   void initState() {
     super.initState();
+    _parentServerId = widget.parentServerId;
     _loadCustomEntries();
   }
 
@@ -209,7 +219,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         .join(" | ");
   }
 
-  // Convert to PNG (consistent FileType/image content)
+  // Convert to PNG
   Future<Uint8List?> _compressToPng(File file) async {
     try {
       final bytes = await file.readAsBytes();
@@ -249,7 +259,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
       return {
         "IsModified": false,
-        "FileData": b64,            // actual image base64 (no data URL prefix)
+        "FileData": b64,
         "FileName": "$baseName.png",
         "FileType": "image/png",
         "Remarks": "",
@@ -324,7 +334,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     if (curr < value) await prefs.setInt(key, value);
   }
 
-  // ---- POST call ----
+  // ---- POST call with ParentCustomerDataId support ----
   Future<Map<String, dynamic>> _createCustomerOnServerExactPayload({
     required String name,
     required String surname,
@@ -335,14 +345,13 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     required String others,
     required String? dobIsoZ,
     required int id,
+    int? parentCustomerDataId, // NEW
     int? fileId,
     Map<String, dynamic>? httpFileData,
   }) async {
     final token = await TokenStorage.getToken();
-
     final hasImage = (httpFileData != null) && (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
 
-    // IMPORTANT: push FileData and provide Id/FileId INSIDE HttpFileData
     final httpFilePayload = hasImage
         ? {
             if (fileId != null) "Id": fileId,
@@ -358,10 +367,11 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
     final payload = <String, dynamic>{
       "Id": id,
+      "ParentCustomerDataId": parentCustomerDataId, // null => parent; non-null => child
       "Name": name,
       "Surname": surname,
       "PhoneNumber": phoneNumber,
-      "FileId": hasImage ? fileId : null, // top-level linkage
+      "FileId": hasImage ? fileId : null,
       "EmailId": emailId,
       "Address": address,
       "Gender": gender.toLowerCase(),
@@ -371,7 +381,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       "HttpFileData": httpFilePayload,
     };
 
-    debugPrint('[Add] Using customerId=$id, fileId=${hasImage ? fileId : null}');
+    debugPrint('[Add] Using customerId=$id, parentId=$parentCustomerDataId, fileId=${hasImage ? fileId : null}');
 
     final headers = <String, String>{
       "Content-Type": "application/json; charset=utf-8",
@@ -381,7 +391,6 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
     final url = '$_apiBaseNormalized/CustomerDataM/AddAsync';
     try {
-      // Safe log (mask base64)
       final safePayload = Map<String, dynamic>.from(payload);
       if (safePayload['HttpFileData'] is Map) {
         final fd = Map<String, dynamic>.from(safePayload['HttpFileData'] as Map);
@@ -521,9 +530,10 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       final dobIsoZ = _dobIso8601Z();
       final others = _othersAsString();
 
-      // Send to API (image in HttpFileData; Id/FileId included)
+      // Send to API with ParentCustomerDataId (null for parent; non-null for child)
       final serverResponse = await _createCustomerOnServerExactPayload(
         id: generatedCustomerId,
+        parentCustomerDataId: _parentServerId,
         name: _nameController.text.trim(),
         surname: _surnameController.text.trim(),
         phoneNumber: phoneRaw,
@@ -557,7 +567,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       await _ensureCounterAtLeast('next_server_customer_id', serverId);
       if (fileId != null) await _ensureCounterAtLeast('next_server_file_id', fileId);
 
-      // For immediate UI only (do NOT persist image)
+      // For immediate UI only
       Uint8List? immediateBytes;
       final fdStr = (httpFileData?['FileData'] as String?);
       if (fdStr != null && fdStr.isNotEmpty) {
@@ -566,7 +576,11 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         } catch (_) {}
       }
 
-      // Build local cache map WITHOUT image and WITHOUT photo path
+      // Persist only lightweight info (no image in local storage)
+      final prefs = await SharedPreferences.getInstance();
+      final existing = prefs.getString('customers');
+      final List<dynamic> list = existing != null ? json.decode(existing) : [];
+
       final newCustomerMap = {
         "localId": localId,
         "name": _nameController.text.trim(),
@@ -578,13 +592,9 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         "gender": (_gender ?? "").toLowerCase(),
         "customEntries": _customEntries,
         "serverId": serverId,
-        "fileId": fileId, // link for future fetches (no image persisted)
+        "fileId": fileId,
+        "parentServerId": _parentServerId, // NEW
       };
-
-      // Persist only lightweight info (no image in local storage)
-      final prefs = await SharedPreferences.getInstance();
-      final existing = prefs.getString('customers');
-      final List<dynamic> list = existing != null ? json.decode(existing) : [];
       list.add(newCustomerMap);
 
       await prefs.setString('customers', json.encode(list));
@@ -593,31 +603,25 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
       if (!mounted) return;
 
-      // Return customer with in-memory imageBytes for immediate UI
-      Navigator.pop<Map<String, dynamic>>(
-        context,
-        {
-          'customer': Customer(
-            name: newCustomerMap['name'] as String,
-            surname: newCustomerMap['surname'] as String,
-            phone: newCustomerMap['phone'] as String,
-            email: newCustomerMap['email'] as String,
-            address: newCustomerMap['address'] as String,
-            dob: newCustomerMap['dob'] as String,
-            gender: newCustomerMap['gender'] as String,
-            customEntries: (newCustomerMap['customEntries'] as List<dynamic>)
-                .map<Map<String, String>>((e) => Map<String, String>.from(e))
-                .toList(),
-            photo: null,                  // don't pass local file path
-            imageBytes: immediateBytes,   // in-memory only
-            serverId: serverId.toString(),
-            fileId: fileId,
-          ),
-          'serverId': serverId,
-          'fileId': fileId,
-          'raw': created,
-        },
+      // Return a Customer object (for FamilyPage)
+      final customer = model.Customer(
+        name: newCustomerMap['name'] as String,
+        surname: newCustomerMap['surname'] as String,
+        phone: newCustomerMap['phone'] as String,
+        email: newCustomerMap['email'] as String,
+        address: newCustomerMap['address'] as String,
+        dob: newCustomerMap['dob'] as String,
+        gender: newCustomerMap['gender'] as String,
+        customEntries: (newCustomerMap['customEntries'] as List<dynamic>)
+            .map<Map<String, String>>((e) => Map<String, String>.from(e))
+            .toList(),
+        photo: null,
+        imageBytes: immediateBytes,
+        serverId: serverId.toString(),
+        fileId: fileId,
       );
+
+      Navigator.pop<model.Customer>(context, customer);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Submit failed: $e")));
@@ -669,6 +673,30 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 child: Column(
                   children: [
+                    if (_isAddingChild)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.group, color: Colors.blue),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                "Adding family member under: ${widget.parentDisplay ?? "#$_parentServerId"}",
+                                style: const TextStyle(color: Colors.blue),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     Center(
                       child: GestureDetector(
                         onTap: _pickImage,

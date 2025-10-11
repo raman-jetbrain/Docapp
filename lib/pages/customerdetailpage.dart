@@ -7,6 +7,7 @@ import 'package:docapp/descriptionpage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/familydetailspage.dart';
 import 'package:docapp/model/customer.dart' as model;
+import 'package:docapp/utils/customer_utility.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
@@ -41,6 +42,15 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     super.dispose();
   }
 
+  // Provide child pages with an up-to-date customer that includes 'photo' path
+  model.Customer get _customerForChildren {
+    final map = widget.customer.toMap();
+    if (_photoPath != null && _photoPath!.isNotEmpty) {
+      map['photo'] = _photoPath;
+    }
+    return model.Customer.fromMap(map);
+  }
+
   Uint8List? _decodeDataUrl(String? s) {
     if (s == null || s.isEmpty) return null;
     if (!s.startsWith('data:image')) return null;
@@ -67,12 +77,16 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
       if (bytes[0] == 0x89 &&
           bytes[1] == 0x50 &&
           bytes[2] == 0x4E &&
-          bytes[3] == 0x47) return 'png';
+          bytes[3] == 0x47) {
+        return 'png';
+      }
       if (bytes[0] == 0xFF && bytes[1] == 0xD8) return 'jpg';
       if (bytes[0] == 0x47 &&
           bytes[1] == 0x49 &&
           bytes[2] == 0x46 &&
-          bytes[3] == 0x38) return 'gif';
+          bytes[3] == 0x38) {
+        return 'gif';
+      }
       if (bytes[0] == 0x52 &&
           bytes[1] == 0x49 &&
           bytes[2] == 0x46 &&
@@ -80,7 +94,9 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
           bytes[8] == 0x57 &&
           bytes[9] == 0x45 &&
           bytes[10] == 0x42 &&
-          bytes[11] == 0x50) return 'webp';
+          bytes[11] == 0x50) {
+        return 'webp';
+      }
     }
     return 'jpg';
   }
@@ -299,28 +315,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
   Widget build(BuildContext context) {
     final primaryColor = const Color(0xFF38B6E4);
 
-    ImageProvider? headerImage;
-
-    // Prefer local file if available (we persist API image once)
-    if (_photoPath != null &&
-        _photoPath!.isNotEmpty &&
-        File(_photoPath!).existsSync()) {
-      headerImage = FileImage(File(_photoPath!));
-    }
-
-    // Fallbacks
-    if (headerImage == null &&
-        widget.customer.imageBytes != null &&
-        widget.customer.imageBytes!.isNotEmpty) {
-      headerImage = MemoryImage(widget.customer.imageBytes!);
-    }
-
-    if (headerImage == null && widget.customer.others is String) {
-      final by = _decodeDataUrl(widget.customer.others as String);
-      if (by != null && by.isNotEmpty) {
-        headerImage = MemoryImage(by);
-      }
-    }
+    // Use shared resolver so all pages display the same image
+    final headerImage = customerImageProvider(_customerForChildren);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F2),
@@ -470,7 +466,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => DescriptionPage(customer: widget.customer),
+                                builder: (_) => DescriptionPage(customer: _customerForChildren),
                               ),
                             );
                           },
@@ -484,7 +480,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => DocumentsPage(customer: widget.customer),
+                                builder: (_) => DocumentsPage(customer: _customerForChildren),
                               ),
                             );
                           },
@@ -498,7 +494,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => FamilyPage(customer: widget.customer),
+                                builder: (_) => FamilyPage(customer: _customerForChildren),
                               ),
                             );
                           },

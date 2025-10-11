@@ -1,16 +1,10 @@
 import 'dart:convert';
-import 'package:docapp/pages/CustomDrawerPage.dart';
+import 'package:docapp/CustomDrawerPage.dart';
 import 'package:docapp/pages/adduserpage%20.dart';
-import 'package:docapp/api/api_constant.dart';
-import 'package:docapp/pages/customerpage.dart';
+import 'package:docapp/customerpage.dart';
 import 'package:docapp/dateventspage.dart';
-import 'package:docapp/model/customer.dart' as model;
-import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
-import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 
 
 const kPrimaryBlue = Color(0xFF3B5998);
@@ -182,7 +176,7 @@ class _DashboardpageState extends State<Dashboardpage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 30),
-              _buildEventsSection(),
+             // _buildEventsSection(),
               const SizedBox(height: 30),
               _buildQuickActionsSection(),
               const SizedBox(height: 30),
@@ -195,8 +189,8 @@ class _DashboardpageState extends State<Dashboardpage> {
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
   }
-
-  Widget _buildEventsSection() {
+/*
+Widget _buildEventsSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -286,6 +280,7 @@ class _DashboardpageState extends State<Dashboardpage> {
       ),
     );
   }
+  */
 
   Widget _buildQuickActionsSection() {
     return Column(
@@ -442,7 +437,7 @@ class _DashboardpageState extends State<Dashboardpage> {
             _buildNavBarItem(Icons.group, 'Customers', false),
             _buildNavBarItem(Icons.add_circle, 'Add', false),
             _buildNavBarItem(Icons.notifications, 'Events', false),
-            _buildNavBarItem(Icons.menu, 'Menu', false),
+           // _buildNavBarItem(Icons.menu, 'Menu', false),
           ],
         ),
       ),
