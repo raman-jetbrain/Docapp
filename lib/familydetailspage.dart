@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:docapp/pages/adduserpage%20.dart';
+import 'package:docapp/utils/famildetailsutility.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
@@ -15,9 +16,7 @@ const bool kLogHttp = true;
 
 String _maskToken(String? v) {
   if (v == null || v.isEmpty) return '';
-  final s = v
-      .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '')
-      .trim();
+  final s = v.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '').trim();
   if (s.length <= 8) return 'Bearer ****';
   return 'Bearer ${s.substring(0, 4)}****${s.substring(s.length - 4)}';
 }
@@ -30,16 +29,12 @@ void logReq({
 }) {
   if (!kLogHttp) return;
   final h = {...?headers};
-  if (h.containsKey('Authorization')) {
-    h['Authorization'] = _maskToken(h['Authorization']);
-  }
+  if (h.containsKey('Authorization')) h['Authorization'] = _maskToken(h['Authorization']);
   debugPrint('[$method] $url');
   debugPrint('Headers: ${jsonEncode(h)}');
   if (body != null) {
     if (body is String) {
-      final trimmed = body.length > 1000
-          ? '${body.substring(0, 1000)}...(+more)'
-          : body;
+      final trimmed = body.length > 1000 ? '${body.substring(0, 1000)}...(+more)' : body;
       debugPrint('Body: $trimmed');
     } else {
       debugPrint('Body: $body');
@@ -50,14 +45,12 @@ void logReq({
 void logRes(http.Response res) {
   if (!kLogHttp) return;
   final body = res.body;
-  final trimmed = body.length > 1500
-      ? '${body.substring(0, 1500)}...(+more)'
-      : body;
+  final trimmed = body.length > 1500 ? '${body.substring(0, 1500)}...(+more)' : body;
   debugPrint('<- ${res.statusCode} ${res.request?.url}');
   debugPrint(trimmed);
 }
 
-// ---------- Helpers (top-level) ----------
+// ---------- Helpers ----------
 String get _apiBaseNormalized {
   var b = ApiConstants.baseUrl.trim();
   if (b.endsWith('/')) b = b.substring(0, b.length - 1);
@@ -65,11 +58,61 @@ String get _apiBaseNormalized {
   return b;
 }
 
+String get _apiRootNormalized {
+  var b = ApiConstants.baseUrl.trim();
+  return b;
+}
+
+const String kUploadsSegment = '/uploads';
+
+// Build absolute URL from FileName or relative
+String? _fileUrlFromName(String? fileName) {
+  final fn = (fileName ?? '').trim();
+  if (fn.isEmpty) return null;
+  if (fn.startsWith('http://') || fn.startsWith('https://')) return fn;
+  if (fn.startsWith('/')) return '$_apiRootNormalized$fn';
+  return '$_apiRootNormalized$kUploadsSegment/${Uri.encodeComponent(fn)}';
+}
+
+// Extract photo URL from HttpFileData (supports Map or List, FileName/fileName)
+String? _photoUrlFromHttpFileData(dynamic hfd) {
+  if (hfd == null) return null;
+  if (hfd is Map) {
+    final v = hfd['FileName'] ?? hfd['fileName'];
+    if (v is String && v.trim().isNotEmpty) return _fileUrlFromName(v);
+  }
+  if (hfd is List && hfd.isNotEmpty) {
+    final first = hfd.first;
+    if (first is Map) {
+      final v = first['FileName'] ?? first['fileName'];
+      if (v is String && v.trim().isNotEmpty) return _fileUrlFromName(v);
+    }
+  }
+  return null;
+}
+
+// Prefer base64 if present in HttpFileData
+String? _photoDataUrlFromHttpFileData(dynamic hfd) {
+  if (hfd == null) return null;
+  if (hfd is Map) {
+    final data = (hfd['FileData'] ?? hfd['fileData'])?.toString().trim();
+    if (data != null && data.isNotEmpty) {
+      return 'data:image/jpeg;base64,$data';
+    }
+  }
+  if (hfd is List && hfd.isNotEmpty && hfd.first is Map) {
+    final fm = Map<String, dynamic>.from(hfd.first as Map);
+    final data = (fm['FileData'] ?? fm['fileData'])?.toString().trim();
+    if (data != null && data.isNotEmpty) {
+      return 'data:image/jpeg;base64,$data';
+    }
+  }
+  return null;
+}
+
 String? _cleanBearer(String? token) {
   if (token == null) return null;
-  return token
-      .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '')
-      .trim();
+  return token.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '').trim();
 }
 
 Map<String, dynamic> _unwrapApiPayload(dynamic raw) {
@@ -97,11 +140,12 @@ String _fmtDob(String? iso) {
   }
 }
 
+// --------------------------------------------------------------------
+//                             FAMILY PAGE
+// --------------------------------------------------------------------
 class FamilyPage extends StatefulWidget {
   final model.Customer customer;
-
   const FamilyPage({super.key, required this.customer});
-
   @override
   State<FamilyPage> createState() => _FamilyPageState();
 }
@@ -109,36 +153,29 @@ class FamilyPage extends StatefulWidget {
 class _FamilyPageState extends State<FamilyPage> {
   static const Color kPrimaryBlue = Color(0xFF38B6E4);
 
-  // Local family (from SharedPreferences)
   final List<model.Customer> _family = [];
-
-  // Children fetched from server (ChildDatas)
-  final List<model.Customer> _serverChildren = [];
+  List<model.Customer> _serverChildren = [];
   Set<String> _serverChildKeys = {};
-
   List<model.Customer> _filtered = [];
-  final TextEditingController _searchController = TextEditingController();
 
-  // Fresh parent from server (if fetched)
+  final TextEditingController _searchController = TextEditingController();
   model.Customer? _parentOverride;
   bool _loadingParent = false;
   String? _loadError;
-
-  // Small busy flag when preparing "Add member"
   bool _preparingChild = false;
 
-  model.Customer get _parent => _parentOverride ?? widget.customer;
+  // Cache for child photo URLs fetched via GET /GetAsync/{childId}
+  final Map<String, String?> _childPhotoCache = {};
 
+  model.Customer get _parent => _parentOverride ?? widget.customer;
   String _digitsOnly(String s) => s.replaceAll(RegExp(r'\D'), '');
 
-  // Dedupe key prefers server Id; fallback to phone digits
   String _dedupeKey(model.Customer m) {
     final sid = (m.serverId ?? '').toString().trim();
     if (sid.isNotEmpty) return 'id:$sid';
     return 'ph:${_digitsOnly(m.phone)}';
   }
 
-  // Merge parent + server children + local family. Avoid duplicates.
   List<model.Customer> get _membersForUI {
     final seen = <String>{};
     final out = <model.Customer>[];
@@ -149,16 +186,9 @@ class _FamilyPageState extends State<FamilyPage> {
         out.add(m);
       }
     }
-
-    addMember(_parent); // parent first
-    for (final c in _serverChildren) {
-      // server children next (preferred)
-      addMember(c);
-    }
-    for (final m in _family) {
-      // then local-only children
-      addMember(m);
-    }
+    addMember(_parent);
+    for (final c in _serverChildren) addMember(c);
+    for (final f in _family) addMember(f);
     return out;
   }
 
@@ -167,9 +197,9 @@ class _FamilyPageState extends State<FamilyPage> {
   @override
   void initState() {
     super.initState();
-    _loadFamily(); // local family
+    _loadFamily();
     _searchController.addListener(_filter);
-    _fetchParentFromServer(); // refresh parent + children from API
+    _fetchParentFromServer();
   }
 
   @override
@@ -183,23 +213,16 @@ class _FamilyPageState extends State<FamilyPage> {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getString('customers');
     if (data == null || data.isEmpty) {
-      setState(() {
-        _family.clear();
-      });
+      setState(() => _family.clear());
       _filter();
       return;
     }
 
     try {
       final List<dynamic> customers = json.decode(data);
-      print(json.decode(data));
-      final idx = customers.indexWhere(
-        (c) => c['phone'] == widget.customer.phone,
-      );
+      final idx = customers.indexWhere((c) => c['phone'] == widget.customer.phone);
       if (idx == -1) {
-        setState(() {
-          _family.clear();
-        });
+        setState(() => _family.clear());
         _filter();
         return;
       }
@@ -207,21 +230,13 @@ class _FamilyPageState extends State<FamilyPage> {
       final parent = Map<String, dynamic>.from(customers[idx]);
       final famList = (parent['family'] as List?) ?? [];
       final members = famList
-          .map(
-            (e) => model.Customer.fromMap(Map<String, dynamic>.from(e as Map)),
-          )
+          .map((e) => model.Customer.fromMap(Map<String, dynamic>.from(e as Map)))
           .toList();
 
-      setState(() {
-        _family
-          ..clear()
-          ..addAll(members);
-      });
+      setState(() => _family..clear()..addAll(members));
       _filter();
     } catch (_) {
-      setState(() {
-        _family.clear();
-      });
+      setState(() => _family.clear());
       _filter();
     }
   }
@@ -229,40 +244,36 @@ class _FamilyPageState extends State<FamilyPage> {
   Future<void> _saveFamily() async {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getString('customers');
-    final List<dynamic> customers = data != null && data.isNotEmpty
-        ? json.decode(data)
-        : [];
+    final List<dynamic> customers =
+        data != null && data.isNotEmpty ? json.decode(data) : [];
 
-    final idx = customers.indexWhere(
-      (c) => c['phone'] == widget.customer.phone,
-    );
-    final familyMapList = _family.map((m) => m.toMap()).toList();
+    final idx = customers.indexWhere((c) => c['phone'] == widget.customer.phone);
+    final famMapList = _family.map((m) => m.toMap()).toList();
 
     if (idx != -1) {
       final parent = Map<String, dynamic>.from(customers[idx]);
-      parent['family'] = familyMapList;
+      parent['family'] = famMapList;
       customers[idx] = parent;
     } else {
-      customers.add({...widget.customer.toMap(), 'family': familyMapList});
+      customers.add({...widget.customer.toMap(), 'family': famMapList});
     }
 
     await prefs.setString('customers', json.encode(customers));
   }
 
   void _filter() {
-    final query = _searchController.text.toLowerCase();
-    final source = _membersForUI;
+    final q = _searchController.text.toLowerCase();
+    final src = _membersForUI;
     setState(() {
-      _filtered = source.where((m) {
-        final nameMatch = m.name.toLowerCase().contains(query);
-        final surnameMatch = m.surname.toLowerCase().contains(query);
-        final phoneMatch = m.phone.toLowerCase().contains(query);
-        return nameMatch || surnameMatch || phoneMatch;
+      _filtered = src.where((m) {
+        final n = m.name.toLowerCase().contains(q);
+        final s = m.surname.toLowerCase().contains(q);
+        final p = m.phone.toLowerCase().contains(q);
+        return n || s || p;
       }).toList();
     });
   }
 
-  // ---------- Find serverId locally ----------
   Future<String?> _findServerIdInLocalByPhone(String phone) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -289,15 +300,60 @@ class _FamilyPageState extends State<FamilyPage> {
     return null;
   }
 
-  // ---------- Verify server id via GET and return the Response.Id (preferred) ----------
   Future<int?> _verifyAndGetParentIdFromServer(int id) async {
     try {
       final token = await TokenStorage.getToken();
       final jwt = _cleanBearer(token);
       final url = "$_apiBaseNormalized/CustomerDataM/GetAsync/$id";
-      final headers = <String, String>{
+      final headers = {
         "Accept": "application/json",
         "id": "$id",
+        if (jwt != null && jwt.isNotEmpty) "Authorization": "Bearer $jwt",
+      };
+      logReq(method: 'GET', url: url, headers: headers);
+      final res = await http.get(Uri.parse(url), headers: headers);
+      logRes(res);
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        final decoded = jsonDecode(res.body);
+        final map = _unwrapApiPayload(decoded);
+        final respId = int.tryParse((map['Id'] ?? '').toString());
+        return respId ?? id;
+      }
+    } catch (e) {
+      debugPrint('[Verify] Exception: $e');
+    }
+    return null;
+  }
+
+  Future<int?> _resolveParentServerIdForChildAdd() async {
+    String? idStr = (_parentOverride?.serverId ?? '').toString().trim();
+    if (idStr.isEmpty) idStr = (widget.customer.serverId ?? '').toString().trim();
+    if (idStr.isEmpty) idStr = await _findServerIdInLocalByPhone(_parent.phone);
+
+    final candidate = int.tryParse(idStr ?? '');
+    if (candidate == null) return null;
+    final verified = await _verifyAndGetParentIdFromServer(candidate);
+    return verified ?? candidate;
+  }
+
+  // Fetch parent; then fetch profile photo for each child by calling GET /GetAsync/{childId}
+  Future<void> _fetchParentFromServer() async {
+    String? idStr = (widget.customer.serverId ?? '').toString().trim();
+    if (idStr.isEmpty) idStr = await _findServerIdInLocalByPhone(widget.customer.phone);
+    if (idStr == null || idStr.isEmpty) return;
+
+    setState(() {
+      _loadingParent = true;
+      _loadError = null;
+    });
+
+    try {
+      final token = await TokenStorage.getToken();
+      final jwt = _cleanBearer(token);
+      final url = "$_apiBaseNormalized/CustomerDataM/GetAsync/$idStr";
+      final headers = {
+        "Accept": "application/json",
+        "id": idStr,
         if (jwt != null && jwt.isNotEmpty) "Authorization": "Bearer $jwt",
       };
 
@@ -308,163 +364,68 @@ class _FamilyPageState extends State<FamilyPage> {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         final decoded = jsonDecode(res.body);
         final map = _unwrapApiPayload(decoded);
-        final respId = int.tryParse((map['Id'] ?? '').toString());
-        return respId ?? id; // prefer server-provided Id
-      } else {
-        debugPrint('[Verify] GET failed ${res.statusCode}: ${res.body}');
-      }
-    } catch (e) {
-      debugPrint('[Verify] Exception: $e');
-    }
-    return null;
-  }
+        if (map.isEmpty) return;
 
-  // Try to resolve a parent server id:
-  Future<int?> _resolveParentServerIdForChildAdd() async {
-    String? idStr = (_parentOverride?.serverId ?? '').toString().trim();
-    if (idStr.isEmpty) {
-      idStr = (widget.customer.serverId ?? '').toString().trim();
-    }
-    if (idStr.isEmpty) {
-      idStr = await _findServerIdInLocalByPhone(_parent.phone);
-    }
+        // Parent photo (prefer base64)
+        final parentPhoto =
+            _photoDataUrlFromHttpFileData(map['HttpFileData']) ??
+            _photoUrlFromHttpFileData(map['HttpFileData']) ??
+            _fileUrlFromName(map['Photo']?.toString());
 
-    debugPrint('[ResolveParent] Local candidate: $idStr');
-    final candidate = int.tryParse(idStr ?? '');
-    if (candidate == null) return null;
+        final updatedParent = model.Customer(
+          name: (map['Name'] ?? '').toString(),
+          surname: (map['Surname'] ?? '').toString(),
+          phone: (map['PhoneNumber'] ?? '').toString(),
+          email: (map['EmailId'] ?? '').toString(),
+          address: (map['Address'] ?? '').toString(),
+          dob: _fmtDob(map['DOB']?.toString()),
+          gender: (map['Gender'] ?? '').toString().toLowerCase(),
+          customEntries: const [],
+          photo: parentPhoto,
+          serverId: (map['Id'] ?? idStr).toString(),
+        );
 
-    // Verify via GET and prefer Response.Id
-    final verified = await _verifyAndGetParentIdFromServer(candidate);
-    debugPrint('[ResolveParent] Verified Id: $verified');
-    return verified ?? candidate;
-  }
-
-  // ----- Server fetch (refresh parent details + children if we already have an Id) -----
-  Future<void> _fetchParentFromServer() async {
-    // Prefer the id provided on the incoming customer; fallback to local cache.
-    String? idStr = (widget.customer.serverId ?? '').toString().trim();
-    if (idStr.isEmpty) {
-      idStr = await _findServerIdInLocalByPhone(widget.customer.phone);
-    }
-    if (idStr == null || idStr.isEmpty) {
-      debugPrint('[Fetch] No server id available. Skipping fetch.');
-      return;
-    }
-
-    setState(() {
-      _loadingParent = true;
-      _loadError = null;
-    });
-
-    try {
-      final token = await TokenStorage.getToken();
-      final jwt = _cleanBearer(token);
-
-      final url = "$_apiBaseNormalized/CustomerDataM/GetAsync/$idStr";
-      final headers = <String, String>{
-        "Accept": "application/json",
-        "id": idStr,
-        if (jwt != null && jwt.isNotEmpty) "Authorization": "Bearer $jwt",
-      };
-
-      logReq(method: 'GET', url: url, headers: headers);
-      final res = await http.get(Uri.parse(url), headers: headers);
-      logRes(res);
-
-      if (res.statusCode == 401) {
-        setState(() => _loadError = "Unauthorized. Please log in again.");
-        return;
-      }
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        setState(() => _loadError = "Server error ${res.statusCode}");
-        return;
-      }
-
-      final decoded = jsonDecode(res.body);
-      final map = _unwrapApiPayload(decoded);
-      if (map.isEmpty) {
-        setState(() => _loadError = "No data returned from server.");
-        return;
-      }
-
-      // Parent photo URL (HttpFileData.FileName)
-      String? parentPhotoUrl;
-      final hfd = map['HttpFileData'];
-      if (hfd is Map && hfd['FileName'] is String) {
-        final fn = hfd['FileName'] as String;
-        if (fn.startsWith('http://') || fn.startsWith('https://')) {
-          parentPhotoUrl = fn;
-        }
-      }
-
-      // Build parent customer
-      final updated = model.Customer(
-        name: (map['Name'] ?? '').toString(),
-        surname: (map['Surname'] ?? '').toString(),
-        phone: (map['PhoneNumber'] ?? '').toString(),
-        email: (map['EmailId'] ?? '').toString(),
-        address: (map['Address'] ?? '').toString(),
-        dob: _fmtDob(map['DOB']?.toString()),
-        gender: (map['Gender'] ?? '').toString().toLowerCase(),
-        customEntries: const [],
-        photo: parentPhotoUrl,
-        imageBytes: null,
-        serverId: (map['Id'] ?? idStr).toString(),
-        fileId: map['FileId'] is int
-            ? map['FileId'] as int
-            : int.tryParse("${map['FileId'] ?? ''}"),
-      );
-
-      // Parse server children
-      final List<model.Customer> children = [];
-      final childs = map['ChildDatas'];
-      if (childs is List && childs.isNotEmpty) {
-        debugPrint('[Fetch] Found ${childs.length} ChildDatas');
-        for (final c in childs) {
-          if (c is Map) {
-            final cm = Map<String, dynamic>.from(c);
-
-            String? childPhotoUrl;
-            final chfd = cm['HttpFileData'];
-            if (chfd is Map && chfd['FileName'] is String) {
-              final fn = chfd['FileName'] as String;
-              if (fn.startsWith('http://') || fn.startsWith('https://')) {
-                childPhotoUrl = fn;
-              }
+        // Children (basic info first)
+        final children = <model.Customer>[];
+        final childs = map['ChildDatas'] ?? map['ChildxDatas'];
+        if (childs is List && childs.isNotEmpty) {
+          for (final c in childs) {
+            if (c is Map) {
+              final cm = Map<String, dynamic>.from(c);
+              final childId = (cm['Id'] ?? '').toString();
+              children.add(
+                model.Customer(
+                  name: (cm['Name'] ?? '').toString(),
+                  surname: (cm['Surname'] ?? '').toString(),
+                  phone: (cm['PhoneNumber'] ?? cm['Phone'] ?? '').toString(),
+                  email: (cm['EmailId'] ?? cm['Email'] ?? '').toString(),
+                  address: (cm['Address'] ?? '').toString(),
+                  dob: _fmtDob(cm['DOB']?.toString()),
+                  gender: (cm['Gender'] ?? '').toString().toLowerCase(),
+                  customEntries: const [],
+                  photo: null, // will fill from child's own GET
+                  serverId: childId,
+                ),
+              );
             }
-
-            final child = model.Customer(
-              name: (cm['Name'] ?? '').toString(),
-              surname: (cm['Surname'] ?? '').toString(),
-              phone: (cm['PhoneNumber'] ?? cm['Phone'] ?? '').toString(),
-              email: (cm['EmailId'] ?? cm['Email'] ?? '').toString(),
-              address: (cm['Address'] ?? '').toString(),
-              dob: _fmtDob(cm['DOB']?.toString()),
-              gender: (cm['Gender'] ?? '').toString().toLowerCase(),
-              customEntries: const [],
-              photo: childPhotoUrl,
-              imageBytes: null,
-              serverId: (cm['Id'] ?? '').toString(),
-              fileId: cm['FileId'] is int
-                  ? cm['FileId'] as int
-                  : int.tryParse("${cm['FileId'] ?? ''}"),
-            );
-
-            children.add(child);
           }
         }
-      } else {
-        debugPrint('[Fetch] No ChildDatas in response.');
-      }
 
-      setState(() {
-        _parentOverride = updated;
-        _serverChildren
-          ..clear()
-          ..addAll(children);
-        _serverChildKeys = _serverChildren.map(_dedupeKey).toSet();
-        _filter();
-      });
+        // Set parent + basic child list immediately
+        setState(() {
+          _parentOverride = updatedParent;
+          _serverChildren = children;
+          _serverChildKeys = _serverChildren.map(_dedupeKey).toSet();
+          _filter();
+        });
+
+        // Now enrich each child's photo using GET /CustomerDataM/GetAsync/{childId}
+        if (children.isNotEmpty) {
+          await _enrichChildrenPhotos();
+        }
+      } else {
+        setState(() => _loadError = 'HTTP ${res.statusCode}');
+      }
     } catch (e) {
       setState(() => _loadError = e.toString());
     } finally {
@@ -472,10 +433,87 @@ class _FamilyPageState extends State<FamilyPage> {
     }
   }
 
-  // ====== Add member flow (uses AddNewUserPage with ParentCustomerDataId) ======
+  Future<void> _enrichChildrenPhotos() async {
+    final ids = _serverChildren
+        .map((c) => (c.serverId ?? '').trim())
+        .where((id) => id.isNotEmpty)
+        .where((id) => !_childPhotoCache.containsKey(id))
+        .toSet()
+        .toList();
+
+    if (ids.isEmpty) return;
+
+    final futures = ids.map((id) async {
+      final url = await _fetchChildPhotoById(id);
+      return MapEntry(id, url);
+    }).toList();
+
+    final entries = await Future.wait(futures);
+    for (final e in entries) {
+      _childPhotoCache[e.key] = e.value;
+    }
+
+    setState(() {
+      _serverChildren = _serverChildren.map((c) {
+        final id = (c.serverId ?? '').trim();
+        final url = id.isNotEmpty ? _childPhotoCache[id] : null;
+        if (url == null || url.isEmpty) return c;
+        try {
+          final m = c.toMap();
+          m['photo'] = url;
+          return model.Customer.fromMap(Map<String, dynamic>.from(m));
+        } catch (_) {
+          return model.Customer(
+            name: c.name,
+            surname: c.surname,
+            phone: c.phone,
+            email: c.email,
+            address: c.address,
+            dob: c.dob,
+            gender: c.gender,
+            customEntries: const [],
+            photo: url,
+            serverId: c.serverId,
+          );
+        }
+      }).toList();
+      _filter();
+    });
+  }
+
+  Future<String?> _fetchChildPhotoById(String childId) async {
+    try {
+      final token = await TokenStorage.getToken();
+      final jwt = _cleanBearer(token);
+      final url = '$_apiBaseNormalized/CustomerDataM/GetAsync/$childId';
+      final headers = {
+        'Accept': 'application/json',
+        if (jwt != null && jwt.isNotEmpty) 'Authorization': 'Bearer $jwt',
+      };
+      logReq(method: 'GET', url: url, headers: headers);
+      final res = await http.get(Uri.parse(url), headers: headers);
+      logRes(res);
+      if (res.statusCode < 200 || res.statusCode >= 300) return null;
+
+      final decoded = jsonDecode(res.body);
+      final map = _unwrapApiPayload(decoded);
+
+      // Prefer base64 from HttpFileData.FileData
+      final dataUrl = _photoDataUrlFromHttpFileData(map['HttpFileData']);
+      if (dataUrl != null && dataUrl.isNotEmpty) return dataUrl;
+
+      // Else use filename/url
+      final photo = _photoUrlFromHttpFileData(map['HttpFileData']) ??
+          _fileUrlFromName(map['Photo']?.toString());
+      return photo;
+    } catch (e) {
+      debugPrint('[ChildPhoto] $childId error: $e');
+      return null;
+    }
+  }
+
   Future<void> _addMember() async {
     setState(() => _preparingChild = true);
-
     int? parentId;
     try {
       parentId = await _resolveParentServerIdForChildAdd();
@@ -483,29 +521,12 @@ class _FamilyPageState extends State<FamilyPage> {
       if (mounted) setState(() => _preparingChild = false);
     }
 
-    if (parentId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "Parent is not synced with server; adding as standalone. To add as child, sync parent first.",
-          ),
-        ),
-      );
-    }
-
-    final display = [
-      _parent.name,
-      _parent.surname,
-    ].where((e) => e.trim().isNotEmpty).join(' ');
-    debugPrint(
-      '[AddMember] Navigating to AddNewUserPage with parentServerId=$parentId',
-    );
+    final display = [_parent.name, _parent.surname].where((e) => e.trim().isNotEmpty).join(' ');
     final newMember = await Navigator.push<model.Customer?>(
       context,
       MaterialPageRoute(
         builder: (_) => AddNewUserPage(
-          parentServerId:
-              parentId, // null => will create as parent; non-null => as child
+          parentServerId: parentId,
           parentDisplay: display.isEmpty ? _parent.phone : display,
         ),
       ),
@@ -517,99 +538,97 @@ class _FamilyPageState extends State<FamilyPage> {
         _filter();
       });
       await _saveFamily();
-
-      // Refresh from server so the child appears under ChildDatas too
       await _fetchParentFromServer();
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Family member added')));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Family member added')),
+      );
     }
   }
 
   Future<void> _removeMember(model.Customer member) async {
     if (_isPrimary(member)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("You can't remove the primary customer"),
-          ),
-        );
-      }
-      return;
-    }
-
-    // Prevent removing server children from local cache (no server delete here)
-    final isServerChild = _serverChildKeys.contains(_dedupeKey(member));
-    if (isServerChild) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "This member is from server. Deletion is not available here.",
-          ),
-        ),
+        const SnackBar(content: Text("You can't remove the primary customer.")),
       );
       return;
     }
 
-    final confirm = await showDialog<bool>(
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Remove Family Member'),
-        content: const Text('Are you sure you want to remove this member?'),
+        content: Text(
+          'Do you want to delete ${member.name} ${member.surname}? '
+          'This will delete them permanently from the server if synced.',
+        ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Remove', style: TextStyle(color: Colors.white)),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
-    if (confirm == true) {
-      setState(() {
-        _family.removeWhere((c) => _dedupeKey(c) == _dedupeKey(member));
-        _filter();
-      });
-      await _saveFamily();
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Removed')));
+    if (confirmed != true) return;
+
+    final isServerChild = _serverChildKeys.contains(_dedupeKey(member));
+
+    try {
+      if (isServerChild && (member.serverId?.isNotEmpty ?? false)) {
+        final token = await TokenStorage.getToken();
+        final jwt = _cleanBearer(token);
+        final url = Uri.parse('$_apiBaseNormalized/CustomerDataM/DeleteAsync/${member.serverId}');
+        final headers = {
+          "Accept": "application/json",
+          if (jwt != null && jwt.isNotEmpty) "Authorization": "Bearer $jwt",
+        };
+        logReq(method: 'DELETE', url: url.toString(), headers: headers);
+        final res = await http.delete(url, headers: headers);
+        logRes(res);
+
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Member deleted successfully.")),
+          );
+          await _fetchParentFromServer();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed: HTTP ${res.statusCode}')),
+          );
+        }
+      } else {
+        setState(() {
+          _family.removeWhere((c) => _dedupeKey(c) == _dedupeKey(member));
+          _filter();
+        });
+        await _saveFamily();
       }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deletion failed: $e')),
+      );
     }
   }
 
   void _openDetails(model.Customer member) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => CustomerDetailPage(customer: member)),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => CustomerDetailPage(customer: member)));
   }
 
   void _openDocs(model.Customer member) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => DocumentsPage(customer: member)),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => DocumentsPage(customer: member)));
   }
 
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    final padding = width * 0.05;
+    final pad = width * 0.05;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F9FC),
       body: CustomScrollView(
         slivers: [
-          // SliverAppBar like CustomerScreen
           SliverAppBar(
             expandedHeight: 70,
             pinned: true,
@@ -623,53 +642,28 @@ class _FamilyPageState extends State<FamilyPage> {
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
                 shadows: [
-                  Shadow(
-                    blurRadius: 6,
-                    color: Colors.black54,
-                    offset: Offset(1, 1),
-                  ),
+                  Shadow(blurRadius: 6, color: Colors.black54, offset: Offset(1, 1)),
                 ],
               ),
             ),
-            flexibleSpace: FlexibleSpaceBar(
-              background: Container(
-                decoration: const BoxDecoration(
+            flexibleSpace: const FlexibleSpaceBar(
+              background: DecoratedBox(
+                decoration: BoxDecoration(
                   image: DecorationImage(
                     image: AssetImage("assets/images/Background2.jpeg"),
                     fit: BoxFit.cover,
-                  ),
-                ),
-                child: SafeArea(
-                  child: Align(
-                    alignment: Alignment.topRight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 16, top: 8),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.asset(
-                          "assets/images/logo2.png",
-                          height: 40,
-                          width: 60,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
                   ),
                 ),
               ),
             ),
           ),
 
-          // Main content like CustomerScreen
+          // List area
           SliverFillRemaining(
             child: Column(
               children: [
-                // Search bar + status
                 Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: padding,
-                    vertical: 15,
-                  ),
+                  padding: EdgeInsets.symmetric(horizontal: pad, vertical: 15),
                   child: Column(
                     children: [
                       Container(
@@ -690,10 +684,7 @@ class _FamilyPageState extends State<FamilyPage> {
                             prefixIcon: Icon(Icons.search, color: Colors.grey),
                             hintText: "Search by name, surname or phone",
                             border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 14,
-                            ),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                           ),
                         ),
                       ),
@@ -708,9 +699,7 @@ class _FamilyPageState extends State<FamilyPage> {
                                   : "Error: $_loadError",
                               style: TextStyle(
                                 fontSize: 12,
-                                color: _loadingParent
-                                    ? Colors.grey
-                                    : Colors.red,
+                                color: _loadingParent ? Colors.grey : Colors.red,
                               ),
                             ),
                           ),
@@ -718,56 +707,32 @@ class _FamilyPageState extends State<FamilyPage> {
                     ],
                   ),
                 ),
-
                 Expanded(
                   child: _filtered.isEmpty
                       ? const Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(
-                                Icons.family_restroom_outlined,
-                                size: 80,
-                                color: Colors.grey,
-                              ),
+                              Icon(Icons.family_restroom_outlined, size: 80, color: Colors.grey),
                               SizedBox(height: 10),
-                              Text(
-                                "No family members found",
-                                style: TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 16,
-                                ),
-                              ),
+                              Text("No family members found",
+                                  style: TextStyle(color: Colors.grey, fontSize: 16)),
                             ],
                           ),
                         )
                       : ListView(
-                          padding: EdgeInsets.symmetric(horizontal: padding),
+                          padding: EdgeInsets.symmetric(horizontal: pad),
                           children: [
-                            Text(
-                              "Family Members",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: width * 0.045,
-                              ),
-                            ),
+                            Text("Family Members",
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: width * 0.045)),
                             const SizedBox(height: 10),
                             ..._filtered.map((member) {
-                              final isPrimary = _isPrimary(member);
-                              final isServerChild =
-                                  _serverChildKeys.contains(
-                                    _dedupeKey(member),
-                                  ) &&
-                                  !isPrimary;
-                              return FamilyMemberCard(
+                              return CustomerListCard(
                                 member: member,
                                 onTap: () => _openDetails(member),
                                 onDocumentsTap: () => _openDocs(member),
-                                onLongPress: isPrimary
-                                    ? null
-                                    : (isServerChild
-                                          ? null
-                                          : () => _removeMember(member)),
+                                onLongPress: _isPrimary(member) ? null : () => _removeMember(member),
                               );
                             }),
                           ],
@@ -778,8 +743,6 @@ class _FamilyPageState extends State<FamilyPage> {
           ),
         ],
       ),
-
-      // Floating add button
       floatingActionButton: FloatingActionButton(
         backgroundColor: kPrimaryBlue,
         onPressed: _preparingChild ? null : _addMember,
@@ -787,10 +750,7 @@ class _FamilyPageState extends State<FamilyPage> {
             ? const SizedBox(
                 height: 22,
                 width: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
               )
             : const Icon(Icons.add, color: Colors.white),
       ),
@@ -798,14 +758,16 @@ class _FamilyPageState extends State<FamilyPage> {
   }
 }
 
-// Same container design as CustomerCard (copied style)
-class FamilyMemberCard extends StatelessWidget {
+// --------------------------------------------------------------------
+//                 CUSTOMER-LIKE CARD FOR FAMILY MEMBERS
+// --------------------------------------------------------------------
+class CustomerListCard extends StatelessWidget {
   final model.Customer member;
   final VoidCallback? onTap;
   final VoidCallback? onDocumentsTap;
   final VoidCallback? onLongPress;
 
-  const FamilyMemberCard({
+  const CustomerListCard({
     super.key,
     required this.member,
     this.onTap,
@@ -815,11 +777,9 @@ class FamilyMemberCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final img = customerImageProvider(member);
-
     return GestureDetector(
       onTap: onTap,
-      onLongPress: onLongPress, // long-press to remove (local-only)
+      onLongPress: onLongPress,
       child: Container(
         margin: const EdgeInsets.only(bottom: 15),
         padding: const EdgeInsets.all(14),
@@ -837,13 +797,11 @@ class FamilyMemberCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            CircleAvatar(
+            CustomerAvatar(
+              customer: member,
               radius: 30,
-              backgroundColor: Colors.blue.shade50,
-              backgroundImage: img,
-              child: img == null
-                  ? const Icon(Icons.person, size: 30, color: Colors.blueGrey)
-                  : null,
+              bgColor: Colors.blue.shade50,
+              iconColor: Colors.blueGrey,
             ),
             const SizedBox(width: 15),
             Expanded(

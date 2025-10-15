@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/model/customer.dart';
 import 'package:docapp/storage/Token_storage.dart';
+import 'package:docapp/utils/famildetailsutility.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
@@ -13,7 +13,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:path/path.dart' as p;
 
-// ================== DescriptionPage ==================
 class DescriptionPage extends StatefulWidget {
   final Customer customer;
   const DescriptionPage({super.key, required this.customer});
@@ -50,6 +49,7 @@ class _DescriptionPageState extends State<DescriptionPage> {
   // State
   bool _isLoading = false;
   bool _isSubmitting = false;
+  bool _sharingAll = false;
 
   // Per-container edit flags
   bool _editProfile = false; // image
@@ -86,6 +86,7 @@ class _DescriptionPageState extends State<DescriptionPage> {
   // Server record + Documents
   Map<String, dynamic>? _serverRecord;
   List<_ServerDoc> _serverDocs = [];
+  final Set<String> _deletingDocIds = {}; // track deleting docs
 
   // IDs
   int? _serverId;
@@ -136,11 +137,10 @@ class _DescriptionPageState extends State<DescriptionPage> {
               surname == _customer.surname &&
               phone == _customer.phone) {
             final id = item['serverId'];
-            if (id != null)
-              setState(
-                () =>
-                    _serverId = (id is int) ? id : int.tryParse(id.toString()),
-              );
+            if (id != null) {
+              setState(() =>
+                  _serverId = (id is int) ? id : int.tryParse(id.toString()));
+            }
             break;
           }
         }
@@ -177,14 +177,14 @@ class _DescriptionPageState extends State<DescriptionPage> {
         if (e is Map) {
           final ph = (e['PhoneNumber'] ?? '').toString();
           if (_normPhone(ph) == myPhone && myPhone.isNotEmpty) {
-            final idVal =
-                e['Id'] ??
+            final idVal = e['Id'] ??
                 e['ID'] ??
                 e['CustomerId'] ??
                 e['CustomerID'] ??
                 e['id'];
-            if (idVal != null)
+            if (idVal != null) {
               foundId = idVal is int ? idVal : int.tryParse(idVal.toString());
+            }
             break;
           }
         }
@@ -196,19 +196,18 @@ class _DescriptionPageState extends State<DescriptionPage> {
         for (final e in list) {
           if (e is Map) {
             final name = (e['Name'] ?? '').toString().trim().toLowerCase();
-            final surname = (e['Surname'] ?? '')
-                .toString()
-                .trim()
-                .toLowerCase();
+            final surname =
+                (e['Surname'] ?? '').toString().trim().toLowerCase();
             if (name == first && surname == last) {
-              final idVal =
-                  e['Id'] ??
+              final idVal = e['Id'] ??
                   e['ID'] ??
                   e['CustomerId'] ??
                   e['CustomerID'] ??
                   e['id'];
-              if (idVal != null)
-                foundId = idVal is int ? idVal : int.tryParse(idVal.toString());
+              if (idVal != null) {
+                foundId =
+                    idVal is int ? idVal : int.tryParse(idVal.toString());
+              }
               break;
             }
           }
@@ -263,6 +262,14 @@ class _DescriptionPageState extends State<DescriptionPage> {
 
       _applyServerRecord(record);
       await _upsertIdInCache(id);
+
+      // Fallback: if no docs in GET, try POST list
+      if (_serverDocs.isEmpty) {
+        final fromPost = await _fetchDocumentsViaPost(id);
+        if (mounted && fromPost.isNotEmpty) {
+          setState(() => _serverDocs = fromPost);
+        }
+      }
     } catch (_) {
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -273,8 +280,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
     if (raw is Map<String, dynamic>) {
       final r = raw['Response'];
       if (r is Map<String, dynamic>) return r;
-      if (r is List && r.isNotEmpty && r.first is Map)
+      if (r is List && r.isNotEmpty && r.first is Map) {
         return Map<String, dynamic>.from(r.first as Map);
+      }
       return raw;
     }
     if (raw is List && raw.isNotEmpty && raw.first is Map) {
@@ -292,14 +300,15 @@ class _DescriptionPageState extends State<DescriptionPage> {
     _nameCtrl.text = (r['Name'] ?? '').toString();
     _surnameCtrl.text = (r['Surname'] ?? '').toString();
     final g = (r['Gender'] ?? '').toString().trim().toLowerCase();
-    if (g.startsWith('m'))
+    if (g.startsWith('m')) {
       _gender = 'Male';
-    else if (g.startsWith('f'))
+    } else if (g.startsWith('f')) {
       _gender = 'Female';
-    else if (g.isEmpty)
+    } else if (g.isEmpty) {
       _gender = null;
-    else
+    } else {
       _gender = 'Other';
+    }
 
     // Contact
     _phoneCtrl.text = (r['PhoneNumber'] ?? '').toString();
@@ -321,9 +330,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final fileIdVal = r['FileId'];
     final httpFileData = r['HttpFileData'];
     final httpFileIdVal = (httpFileData is Map) ? httpFileData['Id'] : null;
-    _fileId = fileIdVal is int
-        ? fileIdVal
-        : int.tryParse((fileIdVal ?? '').toString());
+    _fileId =
+        fileIdVal is int ? fileIdVal : int.tryParse((fileIdVal ?? '').toString());
     _httpFileId = httpFileIdVal is int
         ? httpFileIdVal
         : int.tryParse((httpFileIdVal ?? '').toString());
@@ -345,7 +353,7 @@ class _DescriptionPageState extends State<DescriptionPage> {
       });
     }
 
-    // Documents list
+    // Documents list from GET
     _serverDocs = [];
     final docs = r['Documents'];
     if (docs is List) {
@@ -356,8 +364,10 @@ class _DescriptionPageState extends State<DescriptionPage> {
           final remarks = (m['Remarks'] ?? m['remarks'] ?? '').toString();
           final fileName = (m['FileName'] ?? m['fileName'] ?? '').toString();
           final fileType = (m['FileType'] ?? m['fileType'] ?? '').toString();
-          final urlStrRaw = (m['Url'] ?? m['url'] ?? fileName).toString();
-          final urlStr = urlStrRaw.isNotEmpty ? _resolveFileUrl(urlStrRaw) : '';
+          final urlStrRaw =
+              (m['Url'] ?? m['url'] ?? fileName).toString();
+          final urlStr =
+              urlStrRaw.isNotEmpty ? _resolveFileUrl(urlStrRaw) : '';
           _serverDocs.add(
             _ServerDoc(
               id: id,
@@ -385,14 +395,15 @@ class _DescriptionPageState extends State<DescriptionPage> {
     _avatarBytes = c.imageBytes;
 
     final g = (c.gender ?? '').trim().toLowerCase();
-    if (g.startsWith('m'))
+    if (g.startsWith('m')) {
       _gender = 'Male';
-    else if (g.startsWith('f'))
+    } else if (g.startsWith('f')) {
       _gender = 'Female';
-    else if (g.isEmpty)
+    } else if (g.isEmpty) {
       _gender = null;
-    else
+    } else {
       _gender = 'Other';
+    }
 
     final dob = _parseLocalDob(c.dob);
     _selectedDate = dob;
@@ -403,11 +414,11 @@ class _DescriptionPageState extends State<DescriptionPage> {
   DateTime? _parseLocalDob(String? v) {
     if (v == null || v.trim().isEmpty) return null;
     if (v.contains('-')) return DateTime.tryParse(v);
-    final p = v.split('/');
-    if (p.length == 3) {
-      final d = int.tryParse(p[0]) ?? 1;
-      final m = int.tryParse(p[1]) ?? 1;
-      final y = int.tryParse(p[2]) ?? 1970;
+    final pz = v.split('/');
+    if (pz.length == 3) {
+      final d = int.tryParse(pz[0]) ?? 1;
+      final m = int.tryParse(pz[1]) ?? 1;
+      final y = int.tryParse(pz[2]) ?? 1970;
       return DateTime(y, m, d);
     }
     return null;
@@ -450,15 +461,15 @@ class _DescriptionPageState extends State<DescriptionPage> {
       '.tiff',
       '.heic',
     ].contains(ext);
-    // If URL without extension and no mime, we won't assume it's image.
   }
 
   Future<Uint8List?> _fetchBytesWithAuth(String url) async {
     try {
       final token = await _resolveToken();
       final headers = <String, String>{'Accept': '*/*'};
-      if (token != null && token.isNotEmpty)
+      if (token != null && token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
+      }
       final res = await http.get(Uri.parse(url), headers: headers);
       if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
     } catch (_) {}
@@ -509,25 +520,26 @@ class _DescriptionPageState extends State<DescriptionPage> {
     }
   }
 
+  // FIX: build HttpFileData with correct MIME and filename extension
   Future<Map<String, dynamic>> _buildHttpFileData({
     required int customerId,
     required int httpFileId,
   }) async {
     Uint8List? bytes;
     String fileName = "";
-    String fileType = "jpg";
+    String fileType = "image/jpeg"; // proper MIME
 
     if (_imageFile != null) {
       final compressed = await _compressImageFromFile(_imageFile!);
       if (compressed != null && compressed.isNotEmpty) {
         bytes = compressed;
-        final fn = _imageFile!.path.split(Platform.pathSeparator).last;
-        fileName = fn.contains('.') ? fn.substring(0, fn.lastIndexOf('.')) : fn;
+        final base = p.basenameWithoutExtension(_imageFile!.path);
+        fileName = "$base.jpg"; // ensure extension
       }
     }
 
     final isModified = bytes != null && bytes.isNotEmpty;
-    final b64 = isModified ? base64Encode(bytes!) : "";
+    final b64 = isModified ? base64Encode(bytes) : "";
 
     return {
       "Id": httpFileId,
@@ -558,8 +570,7 @@ class _DescriptionPageState extends State<DescriptionPage> {
 
     final payload = <String, dynamic>{
       "Id": id,
-      "ParentCustomerDataId":
-          (_serverRecord?['ParentCustomerDataId'] ?? 0) as int,
+      "ParentCustomerDataId": (_serverRecord?['ParentCustomerDataId'] ?? 0) as int,
       "Name": name,
       "Surname": surname,
       "PhoneNumber": phoneNumber,
@@ -790,8 +801,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
         final lastUser = json.decode(lastUserJson);
         final match =
             (lastUser['name'] == _customer.name &&
-            lastUser['surname'] == _customer.surname &&
-            lastUser['phone'] == _customer.phone);
+                lastUser['surname'] == _customer.surname &&
+                lastUser['phone'] == _customer.phone);
         if (match) await prefs.remove('last_user');
       }
     }
@@ -812,6 +823,120 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final othersText = _othersCtrl.text.trim();
     if (othersText.isNotEmpty) buf.writeln('📝 $othersText');
     await Share.share(buf.toString());
+  }
+
+  // ------------------------ Share All Documents (NEW) ------------------------
+
+  String _inferMimeFromNameOrType(String name, String fileType) {
+    final ext = p.extension(name).toLowerCase();
+    if (ext == '.png') return 'image/png';
+    if (ext == '.jpg' || ext == '.jpeg') return 'image/jpeg';
+    if (ext == '.gif') return 'image/gif';
+    if (ext == '.webp') return 'image/webp';
+    if (ext == '.bmp') return 'image/bmp';
+    if (ext == '.tif' || ext == '.tiff') return 'image/tiff';
+    if (ext == '.pdf') return 'application/pdf';
+    if (ext == '.csv') return 'text/csv';
+    if (ext == '.xls') return 'application/vnd.ms-excel';
+    if (ext == '.xlsx') {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+    if (ext == '.doc') return 'application/msword';
+    if (ext == '.docx') {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    if (ext == '.txt' || fileType.toLowerCase().contains('text')) {
+      return 'text/plain';
+    }
+
+    // fallback from fileType if extension missing
+    final t = fileType.toLowerCase();
+    if (t.startsWith('image/')) return t;
+    if (t.contains('pdf')) return 'application/pdf';
+    if (t.contains('excel') || t.contains('sheet')) {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+    if (t.contains('word')) {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    return 'application/octet-stream';
+  }
+
+  String _safeFileNameForDoc(_ServerDoc doc) {
+    final base = doc.fileName.trim().isNotEmpty
+        ? doc.fileName.trim()
+        : 'document_${doc.id}';
+    String ext = p.extension(base);
+    if (ext.isEmpty) {
+      final t = doc.fileType.toLowerCase();
+      if (t.startsWith('image/')) {
+        ext = '.${t.split('/').last}';
+      } else if ((doc.url ?? '').isNotEmpty && doc.url!.contains('.')) {
+        ext = p.extension(Uri.parse(doc.url!).path);
+      } else {
+        if (t.contains('pdf')) {
+          ext = '.pdf';
+        } else if (t.contains('excel') || t.contains('sheet')) ext = '.xlsx';
+        else if (t.contains('word')) ext = '.docx';
+        else if (t.contains('text')) ext = '.txt';
+        else ext = '.bin';
+      }
+    }
+    return base.endsWith(ext) ? base : '$base$ext';
+  }
+
+  Future<void> _shareAllDocuments() async {
+    if (_serverDocs.isEmpty) {
+      _snack('No documents to share');
+      return;
+    }
+
+    setState(() => _sharingAll = true);
+    try {
+      final files = <XFile>[];
+      final fallbackUrls = <String>[];
+
+      for (final doc in _serverDocs) {
+        if (doc.url == null || doc.url!.isEmpty) {
+          if (doc.fileName.isNotEmpty) fallbackUrls.add(doc.fileName);
+          continue;
+        }
+        try {
+          final bytes = await _fetchBytesWithAuth(doc.url!);
+          if (bytes != null && bytes.isNotEmpty) {
+            final name = _safeFileNameForDoc(doc);
+            final mime = _inferMimeFromNameOrType(name, doc.fileType);
+            files.add(XFile.fromData(bytes, name: name, mimeType: mime));
+          } else {
+            fallbackUrls.add(doc.url!);
+          }
+        } catch (_) {
+          fallbackUrls.add(doc.url!);
+        }
+      }
+
+      final caption = StringBuffer();
+      for (final d in _serverDocs) {
+        final line = d.remarks.trim().isEmpty
+            ? d.fileName
+            : '${d.fileName} - ${d.remarks}';
+        caption.writeln(line);
+      }
+
+      if (files.isNotEmpty) {
+        if (fallbackUrls.isNotEmpty) {
+          caption.writeln('\nLinks:');
+          caption.writeln(fallbackUrls.join('\n'));
+        }
+        await Share.shareXFiles(files, text: caption.toString().trim());
+      } else if (fallbackUrls.isNotEmpty) {
+        await Share.share(('$caption\n${fallbackUrls.join('\n')}').trim());
+      } else {
+        _snack('Unable to gather any documents to share');
+      }
+    } finally {
+      if (mounted) setState(() => _sharingAll = false);
+    }
   }
 
   // ------------------------ Token & errors ------------------------
@@ -850,6 +975,340 @@ class _DescriptionPageState extends State<DescriptionPage> {
   void _snack(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
+  // ------------------------ Documents: Delete support ------------------------
+
+  Future<void> _deleteDocument(_ServerDoc doc) async {
+    if (_serverId == null) {
+      _snack('Missing server Id');
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Document'),
+        content: Text('Delete "${doc.fileName}"?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() => _deletingDocIds.add(doc.id));
+    try {
+      final ok = await _tryDeleteDocFromServer(doc);
+      if (ok) {
+        setState(() {
+          _serverDocs.removeWhere((d) => d.id == doc.id);
+        });
+        _snack('Document deleted');
+        // Optional: refresh to stay in sync with server
+        if (_serverId != null) await _fetchCustomerById(_serverId!);
+      } else {
+        _snack('Delete failed');
+      }
+    } catch (e) {
+      _snack('Delete failed: $e');
+    } finally {
+      if (mounted) setState(() => _deletingDocIds.remove(doc.id));
+    }
+  }
+
+  Future<bool> _tryDeleteDocFromServer(_ServerDoc doc) async {
+    final token = await _resolveToken();
+    if (token == null || token.isEmpty) return false;
+
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+    final idStr = doc.id.trim();
+    final idInt = int.tryParse(idStr);
+
+    // 1) Try DELETE endpoints
+    final deleteCandidates = <String>[
+      '$_apiBaseWithApi/CustomerDataM/FileRecordDeleteAsync/$idStr',
+      '$_apiBaseWithApi/CustomerDataM/FileRecordDelete/$idStr',
+      '$_apiBaseWithApi/CustomerDataM/FileRecordDeleteAsync?Id=$idStr',
+      '$_apiBaseWithApi/CustomerDataM/FileRecordDelete?Id=$idStr',
+      '${_apiBaseUrl.trim().replaceAll(RegExp(r"/+$"), "")}/CustomerDataM/FileRecordDeleteAsync/$idStr',
+      '${_apiBaseUrl.trim().replaceAll(RegExp(r"/+$"), "")}/CustomerDataM/FileRecordDelete/$idStr',
+    ];
+    for (final url in deleteCandidates) {
+      try {
+        final res = await http.delete(Uri.parse(url), headers: headers);
+        if (res.statusCode >= 200 && res.statusCode < 300) return true;
+        if (res.statusCode == 404) continue; // try next
+      } catch (_) {}
+    }
+
+    // 2) Try POST delete endpoint with body
+    final postDeleteCandidates = <String>[
+      '$_apiBaseWithApi/CustomerDataM/FileRecordDeleteAsync',
+      '${_apiBaseUrl.trim().replaceAll(RegExp(r"/+$"), "")}/CustomerDataM/FileRecordDeleteAsync',
+    ];
+    for (final url in postDeleteCandidates) {
+      try {
+        final res = await http.post(
+          Uri.parse(url),
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            "Id": idInt ?? idStr,
+            "CustomerDataId": _serverId,
+          }),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) return true;
+      } catch (_) {}
+    }
+
+    // 3) Try "mark as deleted" via Add endpoint (some APIs accept IsDeleted)
+    final addEndpointCandidates = <String>[
+      '$_apiBaseWithApi/CustomerDataM/FileRecordAddAsync',
+      '${_apiBaseUrl.trim().replaceAll(RegExp(r"/+$"), "")}/CustomerDataM/FileRecordAddAsync',
+    ];
+    final addPayload = {
+      "Id": idInt ?? 0,
+      "IsModified": true,
+      "FileData": "",
+      "FileName": doc.fileName,
+      "FileType": doc.fileType,
+      "Remarks": doc.remarks,
+      "IsDeleted": true,
+      "CustomerDataId": _serverId,
+    };
+    for (final url in addEndpointCandidates) {
+      try {
+        final res = await http.post(
+          Uri.parse(url),
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(addPayload),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) return true;
+      } catch (_) {}
+    }
+
+    // 4) Fallback: soft delete via UpdateAsync with Documents = [IsDeleted:true]
+    if (idInt != null) {
+      final ok = await _deleteDocViaUpdate(idInt, doc);
+      if (ok) return true;
+    }
+
+    return false;
+  }
+
+  Future<bool> _deleteDocViaUpdate(int docId, _ServerDoc doc) async {
+    try {
+      final token = await _resolveToken();
+      if (token == null || token.isEmpty || _serverId == null) return false;
+
+      final dobIsoZ = _selectedDate != null
+          ? DateTime(
+              _selectedDate!.year,
+              _selectedDate!.month,
+              _selectedDate!.day,
+              12,
+            ).toUtc().toIso8601String()
+          : null;
+
+      // Minimal HttpFileData unchanged
+      final httpFileData = {
+        "Id": _httpFileId ?? 0,
+        "IsModified": false,
+        "FileData": "",
+        "FileName": "",
+        "FileType": "",
+        "Remarks": (_serverRecord?['HttpFileData']?['Remarks'] ?? '').toString(),
+        "IsDeleted": false,
+        "CustomerDataId": _serverId!,
+      };
+
+      final payload = <String, dynamic>{
+        "Id": _serverId!,
+        "ParentCustomerDataId": (_serverRecord?['ParentCustomerDataId'] ?? 0) as int,
+        "Name": _nameCtrl.text.trim(),
+        "Surname": _surnameCtrl.text.trim(),
+        "PhoneNumber": _phoneCtrl.text.trim(),
+        "FileId": _fileId ?? 0,
+        "EmailId": _emailCtrl.text.trim(),
+        "Address": _addressCtrl.text.trim(),
+        "Gender": _gender ?? '',
+        "Others": _othersCtrl.text.trim(),
+        "ChildDatas": <dynamic>[],
+        "HttpFileData": httpFileData,
+        "Documents": [
+          {
+            "Id": docId,
+            "IsModified": true,
+            "FileData": "",
+            "FileName": doc.fileName,
+            "FileType": doc.fileType,
+            "Remarks": doc.remarks,
+            "IsDeleted": true,
+            "CustomerDataId": _serverId!,
+          }
+        ],
+      };
+      if (dobIsoZ != null && dobIsoZ.isNotEmpty) {
+        payload["DOB"] = dobIsoZ;
+        payload["SDOB"] = dobIsoZ;
+      }
+
+      final headers = <String, String>{
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json",
+        "Authorization": "Bearer $token",
+      };
+
+      final candidates = <String>[
+        '$_apiBaseWithApi/CustomerDataM/UpdateAsync',
+        '${_apiBaseUrl.trim().replaceAll(RegExp(r"/+$"), "")}/CustomerDataM/UpdateAsync',
+      ];
+
+      for (final url in candidates) {
+        try {
+          final res = await http.put(Uri.parse(url), headers: headers, body: jsonEncode(payload));
+          if (res.statusCode >= 200 && res.statusCode < 300) return true;
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // ------------------------ Documents section & POST fallback ------------------------
+
+  Widget _documentsSection() {
+    return _cardWrapper(
+      title: 'Documents',
+      actions: [
+        if (_serverId != null)
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _isLoading
+                ? null
+                : () async {
+                    await _fetchCustomerById(_serverId!);
+                  },
+            icon: const Icon(Icons.refresh, color: Colors.black),
+          ),
+        IconButton(
+          tooltip: 'Share all',
+          onPressed: (_serverDocs.isEmpty || _sharingAll) ? null : _shareAllDocuments,
+          icon: _sharingAll
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.share, color: Colors.black),
+        ),
+      ],
+      child: _serverDocs.isEmpty
+          ? const Text('No documents found')
+          : Column(
+              children: [
+                for (final doc in _serverDocs)
+                  _ServerDocCard(
+                    doc: doc,
+                    isImage: _isImageUrlOrType(doc.fileType) ||
+                        _isImageUrlOrType(doc.url) ||
+                        _isImageUrlOrType(doc.fileName),
+                    fetchBytes: _fetchBytesWithAuth,
+                    onDelete: () => _deleteDocument(doc),
+                    deleting: _deletingDocIds.contains(doc.id),
+                  ),
+              ],
+            ),
+    );
+  }
+
+  Future<List<_ServerDoc>> _fetchDocumentsViaPost(int customerId) async {
+    try {
+      final token = await _resolveToken();
+      if (token == null || token.isEmpty) return [];
+
+      final url = '$_apiBaseWithApi/CustomerDataM/FileRecordGetAsync';
+      final res = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          "CustomerDataId": customerId,
+          "IncludeDeleted": false,
+        }),
+      );
+
+      if (res.statusCode < 200 || res.statusCode >= 300) return [];
+
+      final decoded = jsonDecode(res.body);
+      final payload = _unwrapApi(decoded);
+
+      List docs = const [];
+      if (payload['Documents'] is List) {
+        docs = payload['Documents'] as List;
+      } else if (payload['documents'] is List) {
+        docs = payload['documents'] as List;
+      } else if (payload['Data'] is Map &&
+          payload['Data']['Documents'] is List) {
+        docs = payload['Data']['Documents'] as List;
+      } else if (payload['Data'] is List) {
+        docs = payload['Data'] as List;
+      } else if (payload['Items'] is List) {
+        docs = payload['Items'] as List;
+      }
+
+      final list = <_ServerDoc>[];
+      for (final e in docs) {
+        if (e is! Map) continue;
+        final m = Map<String, dynamic>.from(e);
+
+        final idStr = (m['Id'] ?? m['id'] ?? '').toString();
+        final remarks = (m['Remarks'] ?? m['remarks'] ?? '').toString();
+        final fileName = (m['FileName'] ?? m['fileName'] ?? '').toString();
+        final fileType = (m['FileType'] ?? m['fileType'] ?? '').toString();
+        final urlRaw = (m['Url'] ??
+                m['url'] ??
+                m['DocumentUrl'] ??
+                m['DownloadUrl'] ??
+                m['FileUrl'] ??
+                m['FilePath'] ??
+                fileName)
+            .toString();
+        final resolved = urlRaw.isNotEmpty ? _resolveFileUrl(urlRaw) : null;
+
+        list.add(
+          _ServerDoc(
+            id: idStr.isEmpty
+                ? DateTime.now().microsecondsSinceEpoch.toString()
+                : idStr,
+            remarks: remarks,
+            fileName: fileName.isNotEmpty
+                ? fileName
+                : (urlRaw.isNotEmpty ? urlRaw : 'Document'),
+            fileType: fileType,
+            url: resolved,
+          ),
+        );
+      }
+      return list;
+    } catch (_) {
+      return [];
+    }
+  }
+
   // ------------------------ UI ------------------------
 
   @override
@@ -878,7 +1337,7 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       ),
                     )
                   : Text(
-                      _initials(name, surname),
+                      _initials(name,surname),
                       style: TextStyle(
                         color: kPrimaryBlue,
                         fontWeight: FontWeight.bold,
@@ -892,12 +1351,16 @@ class _DescriptionPageState extends State<DescriptionPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  "${name} ${surname}".trim(),
+                  name.trim(),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
+                ),
+                Text(
+                  _surnameCtrl.text,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
                 ),
                 Text(
                   _phoneCtrl.text,
@@ -958,8 +1421,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
                                       setState(() {
                                         _editProfile = false;
                                         _imageFile = null;
-                                        if (_serverRecord != null)
+                                        if (_serverRecord != null) {
                                           _applyServerRecord(_serverRecord!);
+                                        }
                                       });
                                     },
                               icon: const Icon(Icons.close, color: Colors.red),
@@ -978,7 +1442,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       children: [
                         GestureDetector(
                           onTap: () async {
-                            if (_avatarBytes == null || _avatarBytes!.isEmpty) {
+                            if (_avatarBytes == null ||
+                                _avatarBytes!.isEmpty) {
                               _snack('No image available');
                               return;
                             }
@@ -1010,7 +1475,7 @@ class _DescriptionPageState extends State<DescriptionPage> {
                                       height: double.infinity,
                                     ),
                                   )
-                                : Center(
+                                : const Center(
                                     child: Icon(
                                       Icons.person,
                                       color: Colors.black38,
@@ -1044,7 +1509,7 @@ class _DescriptionPageState extends State<DescriptionPage> {
                               Expanded(
                                 child: OutlinedButton.icon(
                                   onPressed: () =>
-                                      _pickImageFrom(ImageSource.gallery),
+                                      customerImageProvider(ImageSource.gallery as Customer),
                                   icon: const Icon(
                                     Icons.photo_library_outlined,
                                     color: kPrimaryBlue,
@@ -1075,8 +1540,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       onCancel: () {
                         setState(() {
                           _editIdentity = false;
-                          if (_serverRecord != null)
+                          if (_serverRecord != null) {
                             _applyServerRecord(_serverRecord!);
+                          }
                         });
                       },
                       onSave: () => _saveSection(modifyImage: false),
@@ -1133,8 +1599,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       onCancel: () {
                         setState(() {
                           _editContact = false;
-                          if (_serverRecord != null)
+                          if (_serverRecord != null) {
                             _applyServerRecord(_serverRecord!);
+                          }
                         });
                       },
                       onSave: () => _saveSection(modifyImage: false),
@@ -1165,8 +1632,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       onCancel: () {
                         setState(() {
                           _editAddress = false;
-                          if (_serverRecord != null)
+                          if (_serverRecord != null) {
                             _applyServerRecord(_serverRecord!);
+                          }
                         });
                       },
                       onSave: () => _saveSection(modifyImage: false),
@@ -1194,8 +1662,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       onCancel: () {
                         setState(() {
                           _editDates = false;
-                          if (_serverRecord != null)
+                          if (_serverRecord != null) {
                             _applyServerRecord(_serverRecord!);
+                          }
                         });
                       },
                       onSave: () => _saveSection(modifyImage: false),
@@ -1234,8 +1703,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       onCancel: () {
                         setState(() {
                           _editOthers = false;
-                          if (_serverRecord != null)
+                          if (_serverRecord != null) {
                             _applyServerRecord(_serverRecord!);
+                          }
                         });
                       },
                       onSave: () => _saveSection(modifyImage: false),
@@ -1254,6 +1724,10 @@ class _DescriptionPageState extends State<DescriptionPage> {
                   ),
 
                   const SizedBox(height: 14),
+                  // Documents list
+                  _documentsSection(),
+
+                  const SizedBox(height: 14),
                 ],
               ),
             ),
@@ -1270,10 +1744,14 @@ class _DescriptionPageState extends State<DescriptionPage> {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.black12),
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: const [
-          BoxShadow(color: Colors.black12, blurRadius: 3, offset: Offset(1, 1)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
         ],
       ),
       child: Column(
@@ -1281,16 +1759,17 @@ class _DescriptionPageState extends State<DescriptionPage> {
         children: [
           Row(
             children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.black,
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
                 ),
               ),
-              const Spacer(),
-              if (actions != null && actions.isNotEmpty) ...actions,
+              if (actions != null) ...actions,
             ],
           ),
           const SizedBox(height: 10),
@@ -1306,55 +1785,47 @@ class _DescriptionPageState extends State<DescriptionPage> {
     required VoidCallback onCancel,
     required VoidCallback onSave,
   }) {
-    return editing
-        ? [
-            IconButton(
-              tooltip: 'Save',
-              onPressed: _isSubmitting ? null : onSave,
-              icon: const Icon(Icons.check_circle, color: Colors.green),
-            ),
-            IconButton(
-              tooltip: 'Cancel',
-              onPressed: _isSubmitting ? null : onCancel,
-              icon: const Icon(Icons.close, color: Colors.red),
-            ),
-          ]
-        : [
-            IconButton(
-              tooltip: 'Edit',
-              onPressed: onEdit,
-              icon: const Icon(Icons.edit, color: Colors.black),
-            ),
-          ];
+    if (!editing) {
+      return [
+        IconButton(
+          tooltip: 'Edit',
+          onPressed: _isSubmitting ? null : onEdit,
+          icon: const Icon(Icons.edit, color: Colors.black),
+        ),
+      ];
+    }
+    return [
+      IconButton(
+        tooltip: 'Save',
+        onPressed: _isSubmitting ? null : onSave,
+        icon: const Icon(Icons.check_circle, color: Colors.green),
+      ),
+      IconButton(
+        tooltip: 'Cancel',
+        onPressed: _isSubmitting ? null : onCancel,
+        icon: const Icon(Icons.close, color: Colors.red),
+      ),
+    ];
   }
 
   Widget _rowLine(String label, String value) {
-    final safe = value.trim().isEmpty ? 'Not provided' : value.trim();
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 110,
+            width: 100,
             child: Text(
               label,
-              style: const TextStyle(
-                fontSize: 13,
-                color: Colors.black54,
-                fontWeight: FontWeight.w700,
-              ),
+              style: const TextStyle(color: Colors.grey),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
-              safe,
-              style: const TextStyle(
-                fontSize: 14,
-                color: Colors.black,
-                fontWeight: FontWeight.w600,
-              ),
+              value.isNotEmpty ? value : '-',
+              style: const TextStyle(color: Colors.black87),
             ),
           ),
         ],
@@ -1362,26 +1833,39 @@ class _DescriptionPageState extends State<DescriptionPage> {
     );
   }
 
-  Widget _editField(String label, TextEditingController ctrl) {
+  Widget _divider() {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      child: Divider(height: 1, color: Colors.black12),
+    );
+  }
+
+  Widget _editField(String label, TextEditingController controller) {
+    TextInputType? kt;
+    if (label.toLowerCase() == 'phone') kt = TextInputType.phone;
+    if (label.toLowerCase() == 'email') kt = TextInputType.emailAddress;
     return TextField(
-      controller: ctrl,
+      controller: controller,
+      keyboardType: kt,
       decoration: InputDecoration(
         labelText: label,
-        isDense: true,
         border: const OutlineInputBorder(),
+        isDense: true,
       ),
     );
   }
 
-  Widget _divider() => const SizedBox(height: 10);
-
   Future<void> _pickDate() async {
     final now = DateTime.now();
+    final initial = _selectedDate ??
+        DateTime(now.year - 18, now.month, now.day); // default 18 years ago
+    final first = DateTime(1900);
+    final last = DateTime(now.year + 1, 12, 31);
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate ?? DateTime(2000),
-      firstDate: DateTime(1900),
-      lastDate: now,
+      initialDate: initial,
+      firstDate: first,
+      lastDate: last,
     );
     if (picked != null) {
       setState(() {
@@ -1391,212 +1875,371 @@ class _DescriptionPageState extends State<DescriptionPage> {
     }
   }
 
-  String _formatIsoToDdMmYyyy(String? iso) {
-    final d = _parseIso(iso);
-    return d == null ? '' : _fmt(d);
+  String _formatIsoToDdMmYyyy(String? v) {
+    final dt = _parseIso(v);
+    return dt != null ? _fmt(dt) : '';
   }
 }
 
-// ================== Server Document types & card ==================
+// ================== Image Viewer ==================
+class _ImageViewerScreen extends StatelessWidget {
+  final Uint8List bytes;
+  final String? title;
+  const _ImageViewerScreen({required this.bytes, this.title});
 
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title?.trim().isNotEmpty == true ? title! : 'Image'),
+        backgroundColor: const Color(0xFF38B6E4),
+      ),
+      backgroundColor: Colors.black,
+      body: InteractiveViewer(
+        minScale: 0.5,
+        maxScale: 5,
+        child: Center(
+          child: Image.memory(bytes),
+        ),
+      ),
+    );
+  }
+}
+
+// ================== Server Document Model ==================
 class _ServerDoc {
-  _ServerDoc({
+  final String id;
+  final String remarks;
+  final String fileName;
+  final String fileType; // may be mime (image/png) or extension
+  final String? url;
+
+    const _ServerDoc({
     required this.id,
     required this.remarks,
     required this.fileName,
     required this.fileType,
     required this.url,
   });
-
-  final String id;
-  final String remarks;
-  final String fileName;
-  final String fileType; // may be mime or extension-ish
-  final String? url; // absolute URL (not shown in UI)
 }
 
+// ================== Server Document Card (with Delete) ==================
 class _ServerDocCard extends StatefulWidget {
+  final _ServerDoc doc;
+  final bool isImage;
+  final Future<Uint8List?> Function(String url) fetchBytes;
+  final VoidCallback? onDelete;
+  final bool deleting;
+
   const _ServerDocCard({
     required this.doc,
     required this.isImage,
     required this.fetchBytes,
+    this.onDelete,
+    this.deleting = false,
   });
-
-  final _ServerDoc doc;
-  final bool isImage;
-  final Future<Uint8List?> Function(String url) fetchBytes;
 
   @override
   State<_ServerDocCard> createState() => _ServerDocCardState();
 }
 
 class _ServerDocCardState extends State<_ServerDocCard> {
-  Uint8List? _imgBytes;
+  Uint8List? _bytes;
   bool _loading = false;
+  bool _failed = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.isImage && widget.doc.url != null) {
-      _loadImage();
+    if (widget.isImage && widget.doc.url != null && widget.doc.url!.isNotEmpty) {
+      _loadBytes();
     }
   }
 
-  Future<void> _loadImage() async {
-    setState(() => _loading = true);
-    final b = await widget.fetchBytes(widget.doc.url!);
-    if (mounted) {
+  Future<void> _loadBytes() async {
+    if (_loading || widget.doc.url == null || widget.doc.url!.isEmpty) return;
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final b = await widget.fetchBytes(widget.doc.url!);
+      if (!mounted) return;
       setState(() {
-        _imgBytes = b;
-        _loading = false;
+        _bytes = b;
+        _failed = b == null || b.isEmpty;
       });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _failed = true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  IconData _iconForType() {
+    final t = widget.doc.fileType.toLowerCase();
+    final name = widget.doc.fileName.toLowerCase();
+    final ext = p.extension(name.isNotEmpty ? name : t);
+    if (t.startsWith('image/') ||
+        ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(ext)) {
+      return Icons.image_outlined;
+    }
+    if (t.contains('pdf') || ext == '.pdf') return Icons.picture_as_pdf_outlined;
+    if (t.contains('sheet') || t.contains('excel') || ext == '.xls' || ext == '.xlsx' || ext == '.csv') {
+      return Icons.grid_on_outlined;
+    }
+    if (t.contains('word') || ext == '.doc' || ext == '.docx' || ext == '.rtf') {
+      return Icons.description_outlined;
+    }
+    if (t.contains('text') || ext == '.txt' || ext == '.log') {
+      return Icons.notes_outlined;
+    }
+    return Icons.insert_drive_file_outlined;
+  }
+
+  String _safeFileNameWithExt() {
+    final base = widget.doc.fileName.trim().isNotEmpty
+        ? widget.doc.fileName.trim()
+        : 'document_${widget.doc.id}';
+    String ext = p.extension(base);
+    if (ext.isEmpty) {
+      // Infer extension
+      final t = widget.doc.fileType.toLowerCase();
+      if (t.startsWith('image/')) {
+        ext = '.${t.split('/').last}';
+      } else if (widget.doc.url != null && widget.doc.url!.contains('.')) {
+        ext = p.extension(Uri.parse(widget.doc.url!).path);
+      } else {
+        ext = widget.isImage ? '.jpg' : '.bin';
+      }
+    }
+    if (!base.endsWith(ext)) return '$base$ext';
+    return base;
+  }
+
+  String _inferMimeType(String name) {
+    final ext = p.extension(name).toLowerCase();
+    switch (ext) {
+      case '.png':
+        return 'image/png';
+      case '.jpg':
+      case '.jpeg':
+        return 'image/jpeg';
+      case '.gif':
+        return 'image/gif';
+      case '.webp':
+        return 'image/webp';
+      case '.bmp':
+        return 'image/bmp';
+      case '.tif':
+      case '.tiff':
+        return 'image/tiff';
+      case '.pdf':
+        return 'application/pdf';
+      case '.csv':
+        return 'text/csv';
+      case '.xls':
+        return 'application/vnd.ms-excel';
+      case '.xlsx':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case '.doc':
+        return 'application/msword';
+      case '.docx':
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      case '.txt':
+        return 'text/plain';
+      default:
+        return 'application/octet-stream';
+    }
+  }
+
+  Future<void> _openPreview(BuildContext context) async {
+    if (widget.isImage) {
+      if (_bytes == null || _bytes!.isEmpty) {
+        await _loadBytes();
+      }
+      if (!mounted) return;
+      if (_bytes == null || _bytes!.isEmpty) {
+        _snack(context, 'Unable to load image');
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => _ImageViewerScreen(
+            bytes: _bytes!,
+            title: widget.doc.fileName,
+          ),
+        ),
+      );
+      return;
+    }
+    // For non-image, share the URL (simple fallback)
+    if (widget.doc.url != null && widget.doc.url!.isNotEmpty) {
+      await Share.share(widget.doc.url!);
+    } else {
+      _snack(context, 'No preview available');
+    }
+  }
+
+  Future<void> _shareDoc(BuildContext context) async {
+    // If we have bytes (image), share directly; else share URL or meta text
+    if (widget.isImage) {
+      if (_bytes == null || _bytes!.isEmpty) {
+        await _loadBytes();
+      }
+      if (!mounted) return;
+      if (_bytes != null && _bytes!.isNotEmpty) {
+        try {
+          final name = _safeFileNameWithExt();
+          final x = XFile.fromData(
+            _bytes!,
+            name: name,
+            mimeType: _inferMimeType(name),
+          );
+          await Share.shareXFiles([x], text: widget.doc.remarks);
+          return;
+        } catch (_) {
+          // fallthrough to share text
+        }
+      }
+    }
+    final text = StringBuffer()
+      ..writeln(widget.doc.fileName)
+      ..writeln(widget.doc.remarks);
+    if (widget.doc.url != null && widget.doc.url!.isNotEmpty) {
+      text.writeln(widget.doc.url!);
+    }
+    await Share.share(text.toString().trim());
   }
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.doc.remarks.isNotEmpty
-        ? widget.doc.remarks
-        : (widget.doc.fileName.isNotEmpty ? widget.doc.fileName : 'Document');
-    final isImg = widget.isImage && widget.doc.url != null;
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border.all(color: Colors.black12),
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: const [
-          BoxShadow(color: Colors.black12, blurRadius: 3, offset: Offset(1, 1)),
-        ],
+        borderRadius: BorderRadius.circular(10),
       ),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Title row (remarks used as container name)
-          Row(
-            children: [
-              const Icon(
-                Icons.insert_drive_file_outlined,
-                color: Colors.black54,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
+          // Leading preview/icon
+          SizedBox(
+            width: 56,
+            height: 56,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: widget.isImage
+                  ? _imagePreview()
+                  : Container(
+                      color: Colors.grey.shade100,
+                      child: Icon(_iconForType(), color: Colors.black54),
+                    ),
+            ),
           ),
-          const SizedBox(height: 10),
-
-          // Preview (no URL text)
-          if (isImg)
-            GestureDetector(
-              onTap: () async {
-                if (_imgBytes == null && widget.doc.url != null)
-                  await _loadImage();
-                if (_imgBytes == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Preview not available')),
-                  );
-                  return;
-                }
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        _ImageViewerScreen(bytes: _imgBytes!, title: title),
-                  ),
-                );
-              },
-              child: Container(
-                height: 160,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.black12),
-                ),
-                child: _loading
-                    ? const Center(
-                        child: SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : (_imgBytes != null
-                          ? ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.memory(
-                                _imgBytes!,
-                                fit: BoxFit.cover,
-                                width: double.infinity,
-                                height: double.infinity,
-                              ),
-                            )
-                          : Center(
-                              child: Text(
-                                'Preview not available',
-                                style: TextStyle(color: Colors.black54),
-                              ),
-                            )),
-              ),
-            )
-          else
-            Row(
+          const SizedBox(width: 12),
+          // Title + remarks + actions
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  height: 44,
-                  width: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.black12),
+                Text(
+                  widget.doc.fileName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
                   ),
-                  child: const Icon(Icons.description, color: Colors.black54),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    widget.doc.fileName.isNotEmpty
-                        ? widget.doc.fileName
-                        : '(no file name)',
+                if (widget.doc.remarks.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.doc.remarks,
+                    maxLines: 3,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.black87),
+                    style: const TextStyle(color: Colors.black54),
                   ),
+                ],
+                if (widget.doc.url != null && widget.doc.url!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.doc.url!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.blueGrey),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => _openPreview(context),
+                      icon: const Icon(Icons.open_in_new, size: 18),
+                      label: const Text('Open'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: () => _shareDoc(context),
+                      icon: const Icon(Icons.share, size: 18),
+                      label: const Text('Share'),
+                    ),
+                    const Spacer(),
+                    // Delete button on every doc
+                    IconButton(
+                      tooltip: 'Delete',
+                      onPressed: widget.deleting ? null : widget.onDelete,
+                      icon: widget.deleting
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.delete_forever, color: Colors.red),
+                    ),
+                  ],
                 ),
               ],
             ),
+          ),
         ],
       ),
     );
   }
-}
 
-// ================== Simple Image Viewer ==================
-
-class _ImageViewerScreen extends StatelessWidget {
-  const _ImageViewerScreen({required this.bytes, required this.title});
-  final Uint8List bytes;
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(title),
-        backgroundColor: const Color(0xFF38B6E4),
-      ),
-      backgroundColor: Colors.black,
-      body: Center(
-        child: InteractiveViewer(
-          minScale: 0.5,
-          maxScale: 4,
-          child: Image.memory(bytes, fit: BoxFit.contain),
+  Widget _imagePreview() {
+    if (_loading) {
+      return Container(
+        color: Colors.grey.shade100,
+        child: const Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
         ),
-      ),
+      );
+    }
+    if (_failed || _bytes == null || _bytes!.isEmpty) {
+      return Container(
+        color: Colors.grey.shade100,
+        child: const Center(
+          child: Icon(Icons.broken_image_outlined, color: Colors.black38),
+        ),
+      );
+    }
+    return Image.memory(
+      _bytes!,
+      fit: BoxFit.cover,
+      width: 56,
+      height: 56,
     );
+  }
+
+  void _snack(BuildContext context, String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 }

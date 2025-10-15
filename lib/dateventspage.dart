@@ -1,202 +1,291 @@
-import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'template_list_page.dart';
+import 'package:intl/intl.dart';
 
-class DayEventsPage extends StatefulWidget {
-  const DayEventsPage({super.key});
+/// --- DATA MODEL ---
+class CalendarEvent {
+  final String title;
+  final DateTime date;
+  final Color color;
 
-  @override
-  State<DayEventsPage> createState() => _DayEventsPageState();
+  CalendarEvent({
+    required this.title,
+    required this.date,
+    this.color = const Color(0xFF2196F3),
+  });
 }
 
-class _DayEventsPageState extends State<DayEventsPage> {
-  List<Map<String, dynamic>> _todayCustomers = [];
+/// --- MOCK DATA ---
+final List<CalendarEvent> events = [
+  CalendarEvent(
+    title: 'Team Meeting',
+    date: DateTime(2024, 9, 6),
+    color: Colors.blue,
+  ),
+  CalendarEvent(
+    title: 'Doctor Appointment',
+    date: DateTime(2024, 9, 12),
+    color: Colors.red,
+  ),
+  CalendarEvent(
+    title: 'Birthday Party',
+    date: DateTime(2024, 9, 25),
+    color: Colors.green,
+  ),
+  CalendarEvent(
+    title: 'Flight to Tokyo',
+    date: DateTime(2024, 9, 18),
+    color: Colors.amber,
+  ),
+];
+
+/// --- MAIN FUNCTION ---
+void main() {
+  runApp(const CalendarApp());
+}
+
+/// --- ROOT APP ---
+class CalendarApp extends StatelessWidget {
+  const CalendarApp({super.key});
 
   @override
-  void initState() {
-    super.initState();
-    _loadTodayCustomers();
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Flutter Table Calendar Demo',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+      ),
+      home: const CalendarPage(),
+    );
+  }
+}
+
+/// --- PAGE WIDGET ---
+class CalendarPage extends StatefulWidget {
+  const CalendarPage({super.key});
+
+  @override
+  State<CalendarPage> createState() => _CalendarPageState();
+}
+
+class _CalendarPageState extends State<CalendarPage> {
+  DateTime _focusedMonth = DateTime.now();
+
+  List<DateTime?> _generateMonthDays(int year, int month) {
+    final firstDay = DateTime(year, month, 1);
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    final startWeekday = firstDay.weekday; // Monday=1 .. Sunday=7
+    // Fill cells to start on Monday and finish Sunday
+    final totalCells = ((startWeekday - 1) + daysInMonth + 6) ~/ 7 * 7;
+
+    return List<DateTime?>.generate(totalCells, (index) {
+      final dayNumber = index - (startWeekday - 2);
+      if (dayNumber < 1 || dayNumber > daysInMonth) return null;
+      return DateTime(year, month, dayNumber);
+    });
   }
 
-  Future<void> _loadTodayCustomers() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? customersJson = prefs.getString('customers');
+  void _goToNextMonth() {
+    setState(() {
+      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1);
+    });
+  }
 
-    if (customersJson != null) {
-      final List<dynamic> customersList = json.decode(customersJson);
-
-      final now = DateTime.now();
-      final todayDay = now.day;
-      final todayMonth = now.month;
-
-      List<Map<String, dynamic>> matchedCustomers = [];
-
-      for (var customer in customersList) {
-        final dobString = customer['dob'] as String? ?? '';
-        if (dobString.isNotEmpty) {
-          try {
-            final parts = dobString.split('/');
-            if (parts.length >= 2) {
-              final day = int.parse(parts[0]);
-              final month = int.parse(parts[1]);
-              if (day == todayDay && month == todayMonth) {
-                matchedCustomers.add(Map<String, dynamic>.from(customer));
-              }
-            }
-          } catch (_) {
-            // ignore parse errors
-          }
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _todayCustomers = matchedCustomers;
-        });
-      }
-    } else {
-      if (mounted) {
-        setState(() {
-          _todayCustomers = [];
-        });
-      }
-    }
+  void _goToPreviousMonth() {
+    setState(() {
+      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final monthDays = _generateMonthDays(_focusedMonth.year, _focusedMonth.month);
+    final now = DateTime.now();
+
     return Scaffold(
-      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF38B6E4),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-        title: const Text(
-          'Day Events',
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-        ),
+        title: Text(DateFormat.yMMMM().format(_focusedMonth)),
         centerTitle: true,
+        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         actions: [
           IconButton(
-            icon: const Icon(Icons.notifications_none, color: Colors.white),
-            onPressed: () {},
+            icon: const Icon(Icons.arrow_back_ios, size: 18),
+            onPressed: _goToPreviousMonth,
+          ),
+          IconButton(
+            icon: const Icon(Icons.arrow_forward_ios, size: 18),
+            onPressed: _goToNextMonth,
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      body: Column(
+        children: [
+          _buildWeekdayHeader(),
+          Expanded(
+            child: GridView.builder(
+              itemCount: monthDays.length,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 7,
+                childAspectRatio: 1,
+              ),
+              itemBuilder: (context, index) {
+                final date = monthDays[index];
+                final dayEvents = events.where((e) =>
+                    date != null &&
+                    e.date.year == date.year &&
+                    e.date.month == date.month &&
+                    e.date.day == date.day);
+                final isToday = date != null &&
+                    date.day == now.day &&
+                    date.month == now.month &&
+                    date.year == now.year;
+
+                return DateCell(
+                  date: date,
+                  events: dayEvents.toList(),
+                  isToday: isToday,
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWeekdayHeader() {
+    final weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return Container(
+      color: Colors.grey.shade200,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: weekdayLabels
+            .map(
+              (label) => Expanded(
+                child: Center(
+                  child: Text(
+                    label,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+}
+
+/// --- DATE CELL WIDGET ---
+class DateCell extends StatelessWidget {
+  final DateTime? date;
+  final List<CalendarEvent> events;
+  final bool isToday;
+
+  const DateCell({
+    super.key,
+    this.date,
+    required this.events,
+    this.isToday = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (date == null) {
+      return Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+      );
+    }
+
+    return GestureDetector(
+      onTap: events.isEmpty
+          ? null
+          : () => showModalBottomSheet(
+                context: context,
+                builder: (context) => _eventDetailsSheet(context),
+              ),
+      child: Container(
+        margin: const EdgeInsets.all(1),
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+          color: isToday
+              ? Theme.of(context).colorScheme.primary.withOpacity(0.1)
+              : null,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Customers with Birthdays Today 🎉',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-                color: Colors.grey,
+            // day number with optional "today" highlight circle
+            Align(
+              alignment: Alignment.topLeft,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isToday
+                      ? Theme.of(context).colorScheme.primary.withOpacity(0.3)
+                      : Colors.transparent,
+                ),
+                child: Text(
+                  '${date!.day}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isToday
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.black,
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            const Divider(thickness: 1),
-            const SizedBox(height: 12),
-            Expanded(
-              child: _todayCustomers.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No customers with birthdays today.',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: _todayCustomers.length,
-                      itemBuilder: (context, index) {
-                        final customer = _todayCustomers[index];
-                        final name = (customer['name'] ?? '') as String;
-                        final phone = (customer['phone'] ?? '') as String;
-
-                        return _buildCustomerCard(
-                          name: name,
-                          phone: phone,
-                          photo: customer['photo'],
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => TemplateListScreen(customer: {},),
-                              ),
-                            );
-                          },
-                        );
-                      },
+            const SizedBox(height: 2),
+            ...events.map((e) => Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 1, horizontal: 2),
+                  margin: const EdgeInsets.only(bottom: 2),
+                  decoration: BoxDecoration(
+                    color: e.color,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text(
+                    e.title,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      color: Colors.white,
                     ),
-            ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                )),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCustomerCard({
-    required String name,
-    required String phone,
-    String? photo,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: const [
-            BoxShadow(
-              color: Colors.black26,
-              blurRadius: 6,
-              offset: Offset(2, 2),
+  Widget _eventDetailsSheet(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            DateFormat.yMMMMd().format(date!),
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 10),
+          for (final e in events)
+            ListTile(
+              leading: CircleAvatar(backgroundColor: e.color),
+              title: Text(e.title),
+              subtitle:
+                  Text(DateFormat.jm().format(e.date)), // just the time portion
             ),
-          ],
-          border: Border.all(color: Colors.black12),
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 28,
-              backgroundImage: (photo != null && photo.isNotEmpty)
-                  ? Image.file(File(photo)).image
-                  : const AssetImage("assets/default_avatar.png"),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    phone,
-                    style: const TextStyle(
-                      color: Colors.grey,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right, color: Colors.black45),
-          ],
-        ),
+        ],
       ),
     );
   }

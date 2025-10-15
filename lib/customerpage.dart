@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:docapp/pages/adduserpage%20.dart';
 import 'package:docapp/api/customer_api_service.dart';
 import 'package:docapp/pages/customerdetailpage.dart';
-import 'package:docapp/dashboardpage.dart';
+import 'package:docapp/dashboardpage.dart' hide CustomerApiService;
 import 'package:docapp/dateventspage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/model/customer.dart' as model;
@@ -204,7 +204,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
   void _navigateToEvents() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const DayEventsPage()),
+      MaterialPageRoute(builder: (_) => const CalendarApp()),
     );
   }
 

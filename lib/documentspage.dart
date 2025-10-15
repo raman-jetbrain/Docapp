@@ -8,6 +8,7 @@ import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // compute()
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:open_filex/open_filex.dart';
@@ -22,6 +23,79 @@ const int kMaxUploadBytes = 2 * 1024 * 1024; // 2 MB payload limit
 // base64 adds ~33%; keep raw <= ~1.5 MB so base64 stays under 2 MB
 const int kRawBudgetForBase64 = ((kMaxUploadBytes * 3) ~/ 4) - 8 * 1024;
 
+// ---------------- HTTP logging (REQ/RES to terminal, redacts FileData) ----------------
+const bool kLogHttpDocs = true;
+
+String _maskTokenDocs(String? v) {
+  if (v == null || v.isEmpty) return '';
+  final s = v.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '').trim();
+  if (s.length <= 8) return 'Bearer ****';
+  return 'Bearer ${s.substring(0, 4)}****${s.substring(s.length - 4)}';
+}
+
+Object _sanitizeJsonBody(Object body) {
+  try {
+    if (body is String) {
+      final decoded = jsonDecode(body);
+      final sanitized = _sanitizeJsonAny(decoded);
+      return jsonEncode(sanitized);
+    } else if (body is Map || body is List) {
+      return jsonEncode(_sanitizeJsonAny(body));
+    }
+  } catch (_) {}
+  return body is String ? body : jsonEncode(body);
+}
+
+dynamic _sanitizeJsonAny(dynamic v) {
+  if (v is Map) {
+    final m = Map<String, dynamic>.from(v);
+    if (m.containsKey('FileData')) {
+      final fd = m['FileData'];
+      final len = (fd is String) ? fd.length : (fd is List ? fd.length : 0);
+      m['FileData'] = '<omitted ${len} bytes>';
+    }
+    m.updateAll((key, value) => _sanitizeJsonAny(value));
+    return m;
+  } else if (v is List) {
+    return v.map(_sanitizeJsonAny).toList();
+  }
+  return v;
+}
+
+void logDocReq({
+  required String method,
+  required Uri url,
+  Map<String, String>? headers,
+  Object? body,
+}) {
+  if (!kLogHttpDocs) return;
+  final h = {...?headers};
+  if (h.containsKey('Authorization')) h['Authorization'] = _maskTokenDocs(h['Authorization']);
+  debugPrint('[DOC $method] $url');
+  debugPrint('[DOC] Headers: ${jsonEncode(h)}');
+  if (body != null) {
+    final sanitized = _sanitizeJsonBody(body);
+    final s = sanitized is String ? sanitized : sanitized.toString();
+    final trimmed = s.length > 2000 ? '${s.substring(0, 2000)}...(${s.length} chars)' : s;
+    debugPrint('[DOC] Body: $trimmed');
+  }
+}
+
+void logDocRes(http.Response res) {
+  if (!kLogHttpDocs) return;
+  final url = res.request?.url;
+  final status = res.statusCode;
+  final ct = res.headers['content-type']?.toLowerCase() ?? '';
+  debugPrint('[DOC <-] $status $url');
+  if (ct.contains('application/json') || ct.contains('text/')) {
+    final body = res.body;
+    final trimmed = body.length > 2000 ? '${body.substring(0, 2000)}...(${body.length} chars)' : body;
+    debugPrint('[DOC] Response body: $trimmed');
+  } else {
+    debugPrint('[DOC] Response bytes: ${res.bodyBytes.length} (${ct.isEmpty ? 'unknown content-type' : ct})');
+  }
+}
+
 // ---------------- API helpers ----------------
 String get _apiBaseNormalized {
   var b = ApiConstants.baseUrl.trim();
@@ -31,13 +105,23 @@ String get _apiBaseNormalized {
 }
 
 String _resolveFileUrl(String fileNameOrUrl) {
-  if (fileNameOrUrl.isEmpty) return fileNameOrUrl;
-  final u = fileNameOrUrl.trim();
+  final u = (fileNameOrUrl).trim();
+  if (u.isEmpty) return u;
   if (u.startsWith('http')) return u;
   var base = ApiConstants.baseUrl.trim();
   if (base.endsWith('/')) base = base.substring(0, base.length - 1);
+  if (base.toLowerCase().endsWith('/api')) {
+    base = base.substring(0, base.length - 4);
+  }
   if (u.startsWith('/')) return '$base$u';
   return '$base/$u';
+}
+
+bool _sameHostDocs(String a, String b) {
+  final ua = Uri.tryParse(a);
+  final ub = Uri.tryParse(b);
+  if (ua == null || ub == null) return false;
+  return ua.host.toLowerCase() == ub.host.toLowerCase();
 }
 
 String? _extractServerError(String body) {
@@ -77,6 +161,103 @@ Map<String, dynamic> _unwrapApiPayload(dynamic raw) {
   return {};
 }
 
+// ---------------- Separate delete flag helpers (requested) ----------------
+bool parseBoolLoose(dynamic v) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  if (v is String) {
+    final s = v.trim().toLowerCase();
+    return s == 'true' || s == '1' || s == 'yes';
+  }
+  return false;
+}
+
+// Flexible checker: supports IsDeleted / isDeleted / IsDelete / isDelete / IdDelete / idDelete
+bool isDeletedFlag(dynamic source) {
+  if (source is Map) {
+    final m = Map<String, dynamic>.from(source);
+    final v = m['IsDeleted'] ?? m['isDeleted'] ?? m['IsDelete'] ?? m['isDelete'] ?? m['IdDelete'] ?? m['idDelete'];
+    return parseBoolLoose(v);
+  }
+  return parseBoolLoose(source);
+}
+
+// Wrapper that hides the child when deleted
+Widget hideIfDeleted({
+  required dynamic deletedSource, // Map or bool/int/string or the field itself
+  required Widget child,
+}) {
+  return isDeletedFlag(deletedSource) ? const SizedBox.shrink() : child;
+}
+
+// ---------------- Image/base64 off-main-isolate helpers ----------------
+Future<Uint8List?> compressImageToBudgetIsolate(Map<String, dynamic> args) async {
+  final bytes = args['bytes'] as Uint8List;
+  final budget = args['budget'] as int;
+  final minDim = (args['minDim'] as int?) ?? 640;
+  final preferJpeg = (args['preferJpeg'] as bool?) ?? true;
+
+  img.Image? decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+
+  try {
+    decoded = img.bakeOrientation(decoded);
+  } catch (_) {}
+
+  img.Image working = decoded!;
+  int quality = 85;
+
+  while (true) {
+    Uint8List out = Uint8List.fromList(
+      preferJpeg ? img.encodeJpg(working, quality: quality) : img.encodePng(working, level: 6),
+    );
+    if (out.length <= budget) return out;
+
+    if (preferJpeg && quality > 55) {
+      quality -= 10;
+      continue;
+    }
+
+    if (working.width > minDim || working.height > minDim) {
+      final newW = (working.width * 0.85).round();
+      final newH = (working.height * 0.85).round();
+      if (newW <= 0 || newH <= 0) return null;
+      working = img.copyResize(
+        working,
+        width: newW,
+        height: newH,
+        interpolation: img.Interpolation.linear,
+      );
+      if (preferJpeg) quality = (quality + 5).clamp(55, 85);
+      continue;
+    }
+
+    if (!preferJpeg) {
+      out = Uint8List.fromList(img.encodePng(working, level: 9));
+      if (out.length <= budget) return out;
+    }
+    return null;
+  }
+}
+
+String base64EncodeIsolate(Uint8List data) => base64Encode(data);
+
+// ---------------- Doc meta (for delete) ----------------
+class _DocMeta {
+  final int recordId; // server record id used for update/delete
+  final String fileName;
+  final String fileType;
+  final String remarks;
+  final String? url;
+  const _DocMeta({
+    required this.recordId,
+    required this.fileName,
+    required this.fileType,
+    required this.remarks,
+    this.url,
+  });
+}
+
 // ---------------- Page ----------------
 class DocumentsPage extends StatefulWidget {
   final model.Customer customer;
@@ -95,6 +276,12 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   // Server documents
   final List<DocumentItem> _serverDocs = [];
+
+  // Server meta for delete
+  final Map<String, _DocMeta> _docMetaById = {};
+
+  // NEW: delete flag per doc id (for wrapper)
+  final Map<String, bool> _deletedById = {};
 
   String? _selectedId;
   bool _loading = false;
@@ -130,6 +317,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
     return null;
   }
 
+  bool _asBool(dynamic v) => parseBoolLoose(v);
+
   Future<void> _refreshFromServer() async {
     final id = _customerDataId();
     if (id == null) {
@@ -143,8 +332,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
         'Accept': 'application/json',
         if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
       };
-      // IMPORTANT: using GET /api/CustomerDataM/GetAsync/{id}
-      final res = await http.get(Uri.parse('$_apiBaseNormalized/CustomerDataM/GetAsync/$id'), headers: headers);
+      final uri = Uri.parse('$_apiBaseNormalized/CustomerDataM/GetAsync/$id');
+
+      // LOG: GET documents
+      logDocReq(method: 'GET', url: uri, headers: headers);
+      final res = await http.get(uri, headers: headers);
+      logDocRes(res);
+
       if (res.statusCode < 200 || res.statusCode >= 300) {
         final msg = _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
         _snack('Fetch failed: $msg');
@@ -163,31 +357,62 @@ class _DocumentsPageState extends State<DocumentsPage> {
       }
 
       final mapped = <DocumentItem>[];
-      for (final e in docs) {
-        if (e is Map) {
-          final m = Map<String, dynamic>.from(e);
-          final idStr = (m['Id'] ?? m['id'] ?? '').toString();
-          final remarks = (m['Remarks'] ?? m['remarks'] ?? 'Document').toString();
-          final fileName = (m['FileName'] ?? m['fileName'] ?? '').toString();
-          final fileType = (m['FileType'] ?? m['fileType'] ?? '').toString();
-          final urlRaw = (m['Url'] ?? m['url'] ?? fileName).toString();
-          final url = urlRaw.isNotEmpty ? _resolveFileUrl(urlRaw) : null;
+      _docMetaById.clear();
+      _deletedById.clear();
 
-          mapped.add(
-            DocumentItem(
-              id: idStr.isEmpty ? 'srv_${DateTime.now().microsecondsSinceEpoch}' : idStr,
-              title: remarks.isEmpty ? 'Document' : remarks,
-              localPath: null,
-              remoteUrl: url,
-              mimeType: fileType.isEmpty ? null : fileType,
-            ),
-          );
-        }
+      for (final e in docs) {
+        if (e is! Map) continue;
+        final m = Map<String, dynamic>.from(e);
+
+        // read deleted flag (supports many key variants)
+        final del = _asBool(m['IsDeleted'] ?? m['isDeleted'] ?? m['IsDelete'] ?? m['isDelete'] ?? m['IdDelete'] ?? m['idDelete']);
+
+        final idStrRaw = (m['Id'] ?? m['id'] ?? '').toString();
+        final recId = int.tryParse(idStrRaw) ?? 0;
+
+        final remarks = (m['Remarks'] ?? m['remarks'] ?? '').toString().trim();
+        final fileName = (m['FileName'] ?? m['fileName'] ?? '').toString().trim();
+        final fileType = (m['FileType'] ?? m['fileType'] ?? '').toString();
+        final urlRaw = (m['Url'] ?? m['url'] ?? fileName).toString();
+        final url = urlRaw.isNotEmpty ? _resolveFileUrl(urlRaw) : null;
+
+        String itemTitle = remarks.isNotEmpty ? remarks : (fileName.isNotEmpty ? fileName : 'Document');
+
+        final docId = idStrRaw.isEmpty ? 'srv_${DateTime.now().microsecondsSinceEpoch}' : idStrRaw;
+
+        // store delete flag for wrapper
+        _deletedById[docId] = del;
+
+        // Filter out deleted items (primary filter)
+        if (del) continue;
+
+        mapped.add(
+          DocumentItem(
+            id: docId,
+            title: itemTitle,
+            localPath: null,
+            remoteUrl: url,
+            mimeType: fileType.isEmpty ? null : fileType,
+          ),
+        );
+
+        _docMetaById[docId] = _DocMeta(
+          recordId: recId,
+          fileName: fileName.isNotEmpty
+              ? fileName
+              : (url != null ? p.basename(Uri.parse(url).path) : 'doc_$docId'),
+          fileType: fileType.isNotEmpty
+              ? fileType
+              : _guessMimeFromExt(fileName.isNotEmpty ? p.extension(fileName) : (url != null ? p.extension(Uri.parse(url).path) : '')),
+          remarks: remarks.isNotEmpty ? remarks : itemTitle,
+          url: url,
+        );
       }
       setState(() {
         _serverDocs
           ..clear()
           ..addAll(mapped);
+        _selectedId = null;
       });
     } catch (e) {
       _snack('Fetch failed: $e');
@@ -212,45 +437,116 @@ class _DocumentsPageState extends State<DocumentsPage> {
     _typeCtrl.clear();
   }
 
-  // ------------- Pick -> confirm preview -> compress PNG -> upload -------------
+  // ------------- Blocking progress dialog wrapper -------------
+  Future<T> _runBlocking<T>(String message, Future<T> Function() task) async {
+    BuildContext? dialogCtx;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (ctx) {
+        dialogCtx = ctx;
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: AlertDialog(
+            content: Row(
+              children: [
+                const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 16),
+                Expanded(child: Text(message)),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    try {
+      return await task();
+    } finally {
+      if (dialogCtx != null && Navigator.of(dialogCtx!).canPop()) {
+        Navigator.of(dialogCtx!).pop();
+      }
+    }
+  }
+
+  Future<Uint8List?> _compressImageToUnderLimit(Uint8List input) {
+    return compute(compressImageToBudgetIsolate, {
+      'bytes': input,
+      'budget': kRawBudgetForBase64,
+      'minDim': 640,
+      'preferJpeg': true,
+    });
+  }
+
+  Future<String> _base64InBackground(Uint8List bytes) => compute(base64EncodeIsolate, bytes);
+
+  // ------------- File signature helpers (basic) -------------
+  String _extFromMagic(Uint8List data) {
+    if (data.length >= 4) {
+      if (data[0] == 0x25 && data[1] == 0x50 && data[2] == 0x44 && data[3] == 0x46) return '.pdf';
+      if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return '.png';
+      if (data[0] == 0xFF && data[1] == 0xD8) return '.jpg';
+      if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x38) return '.gif';
+      if (data.length >= 12 &&
+          data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
+          data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50) return '.webp';
+      if (data[0] == 0x50 && data[1] == 0x4B) return '.zip';
+    }
+    return '';
+  }
+
+  // ------------- Pick -> confirm preview -> compress -> upload -------------
   Future<void> _pickAndUpload(DocumentItem d) async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: false,
       withData: true,
-      type: FileType.custom,
-      allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff', 'webp', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'heic'],
+      type: FileType.any,
     );
     if (result == null || result.files.isEmpty) return;
 
     final f = result.files.first;
     final name = f.name;
-    final ext = p.extension(name).toLowerCase();
+    String ext = p.extension(name).toLowerCase();
     Uint8List? data = f.bytes;
     if (data == null) {
       _snack('Could not read selected file');
       return;
     }
 
-    final isImage = _isImageExt(ext);
+    if (ext.isEmpty) {
+      final magicExt = _extFromMagic(data);
+      if (magicExt.isNotEmpty) ext = magicExt;
+    }
+
+    bool isImage = _isImageExt(ext);
+    if (!isImage) {
+      try {
+        final decoded = img.decodeImage(data);
+        isImage = decoded != null;
+      } catch (_) {}
+    }
+
     if (isImage) {
-      final png = await _compressImageToPngUnderLimit(data);
-      if (png == null || png.isEmpty) {
-        _snack('Image too large or unsupported. Pick a smaller image.');
-        return;
-      }
       final confirmed = await _confirmDialog(
         title: 'Upload image?',
-        fileName: 'image.png',
-        sizeBytes: png.length,
-        previewBytes: png,
+        fileName: name,
+        sizeBytes: data.length,
+        previewBytes: data,
+        previewCacheWidth: 800,
       );
       if (!confirmed) return;
 
+      final optimized = await _runBlocking<Uint8List?>('Optimizing image...', () => _compressImageToUnderLimit(data));
+      if (optimized == null || optimized.isEmpty) {
+        _snack('Image too large or unsupported. Pick a smaller image.');
+        return;
+      }
+
       await _uploadToServer(
         remarks: d.title,
-        bytes: png,
-        fileName: 'doc_${DateTime.now().millisecondsSinceEpoch}.png',
-        mime: 'image/png',
+        bytes: optimized,
+        fileName: 'doc_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        mime: 'image/jpeg',
         pending: d,
       );
     } else {
@@ -258,6 +554,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
         _snack('File exceeds limit (~1.5MB raw). Choose a smaller file.');
         return;
       }
+
       final confirmed = await _confirmDialog(
         title: 'Upload file?',
         fileName: name,
@@ -269,8 +566,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
       await _uploadToServer(
         remarks: d.title,
         bytes: data,
-        fileName: name,
-        mime: _guessMimeFromExt(ext),
+        fileName: ext.isNotEmpty ? name : 'file_${DateTime.now().millisecondsSinceEpoch}.bin',
+        mime: _guessMimeFromExt(ext.isNotEmpty ? ext : '.bin'),
         pending: d,
       );
     }
@@ -300,40 +597,120 @@ class _DocumentsPageState extends State<DocumentsPage> {
         'Accept': 'application/json',
         if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
       };
-      final payload = <String, dynamic>{
-        "Id": 0,
-        "IsModified": true,
-        "FileData": base64Encode(bytes),
-        "FileName": fileName,
-        "FileType": mime,
-        "Remarks": remarks,
-        "IsDeleted": false,
-        "CustomerDataId": cid,
-      };
 
-      final url = Uri.parse('$_apiBaseNormalized/CustomerDataM/FileRecordAddAsync');
-      final res = await http.post(url, headers: headers, body: jsonEncode(payload));
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        final msg = _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
-        throw Exception(msg);
-      }
+      await _runBlocking('Uploading...', () async {
+        final b64 = await _base64InBackground(bytes);
+        final payload = <String, dynamic>{
+          "Id": 0,
+          "IsModified": true,
+          "FileData": b64,
+          "FileName": fileName,
+          "FileType": mime,
+          "Remarks": remarks,
+          "IsDeleted": false,
+          "CustomerDataId": cid,
+        };
+
+        final url = Uri.parse('$_apiBaseNormalized/CustomerDataM/FileRecordAddAsync');
+
+        // LOG: POST upload (sanitized)
+        final bodyStr = jsonEncode(payload);
+        logDocReq(method: 'POST', url: url, headers: headers, body: bodyStr);
+        final res = await http.post(url, headers: headers, body: bodyStr);
+        logDocRes(res);
+
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          final msg = _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
+          throw Exception(msg);
+        }
+      });
 
       _snack('Uploaded "$remarks"');
-      setState(() {
-        _pending.removeWhere((x) => x.id == pending.id);
-      });
+      if (mounted) {
+        setState(() {
+          _pending.removeWhere((x) => x.id == pending.id);
+        });
+      }
       await _refreshFromServer();
     } catch (e) {
       _snack('Upload failed: $e');
     }
   }
 
+  // ------------- Delete (IsDeleted = true via FileRecordUpdateAsync) -------------
+  Future<void> _deleteDoc(DocumentItem d) async {
+    final cid = _customerDataId();
+    if (cid == null) {
+      _snack('Customer id not found');
+      return;
+    }
+
+    final meta = _docMetaById[d.id];
+    final recId = meta?.recordId ?? int.tryParse(d.id) ?? 0;
+    if (recId <= 0) {
+      _snack('Document id not found');
+      return;
+    }
+
+    final fileName = meta?.fileName ??
+        (d.remoteUrl != null ? p.basename(Uri.parse(d.remoteUrl!).path) : 'doc_${d.id}');
+    final fileType = meta?.fileType ?? (d.mimeType ?? _guessMimeFromExt(p.extension(fileName)));
+    final remarks = meta?.remarks ?? d.title;
+
+    try {
+      final token = await TokenStorage.getToken();
+      final headers = <String, String>{
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      };
+
+      await _runBlocking('Deleting...', () async {
+        // Do NOT send FileData on delete
+        final payload = {
+          "Id": recId,
+          "IsModified": true,
+          "FileName": fileName,
+          "FileType": fileType,
+          "Remarks": remarks,
+          "IsDeleted": true,
+          "CustomerDataId": cid,
+        };
+
+        final url = Uri.parse('$_apiBaseNormalized/CustomerDataM/FileRecordUpdateAsync');
+
+        // LOG: POST delete (sanitized)
+        final bodyStr = jsonEncode(payload);
+        logDocReq(method: 'POST', url: url, headers: headers, body: bodyStr);
+        final res = await http.post(url, headers: headers, body: bodyStr);
+        logDocRes(res);
+
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          final msg = _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
+          throw Exception(msg);
+        }
+      });
+
+      if (!mounted) return;
+      // Mark as deleted and optimistically remove
+      _deletedById[d.id] = true;
+      setState(() {
+        _serverDocs.removeWhere((x) => x.id == d.id);
+        _docMetaById.remove(d.id);
+        if (_selectedId == d.id) _selectedId = null;
+      });
+      _snack('Deleted');
+    } catch (e) {
+      _snack('Delete failed: $e');
+    }
+  }
+
   String _fmtSize(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
-  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
-}
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
 
   // ------------- Confirm dialog -------------
   Future<bool> _confirmDialog({
@@ -341,11 +718,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
     required String fileName,
     required int sizeBytes,
     Uint8List? previewBytes,
+    int? previewCacheWidth,
   }) async {
     final sizeStr = _fmtSize(sizeBytes);
     return await showDialog<bool>(
           context: context,
           barrierDismissible: false,
+          useRootNavigator: true,
           builder: (ctx) => AlertDialog(
             title: Text(title),
             content: Column(
@@ -354,7 +733,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 if (previewBytes != null)
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(previewBytes, height: 180, fit: BoxFit.cover),
+                    child: Image.memory(
+                      previewBytes,
+                      height: 180,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      cacheWidth: previewCacheWidth,
+                    ),
                   )
                 else
                   Container(
@@ -397,10 +782,17 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
     try {
       final token = await TokenStorage.getToken();
-      final res = await http.get(Uri.parse(d.remoteUrl!), headers: {
+      final headers = {
         'Accept': '*/*',
         if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
-      });
+      };
+      final uri = Uri.parse(d.remoteUrl!);
+
+      // LOG: GET file download
+      logDocReq(method: 'GET', url: uri, headers: headers);
+      final res = await http.get(uri, headers: headers);
+      logDocRes(res);
+
       if (res.statusCode == 200) {
         final dir = await getApplicationDocumentsDirectory();
         final ext = _extFromUrl(d.remoteUrl!);
@@ -492,64 +884,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   bool _isImageExt(String ext) {
     final e = ext.toLowerCase();
-    return ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.heic'].contains(e);
-  }
-
-  Future<Uint8List?> _compressImageToPngUnderLimit(Uint8List input) async {
-    try {
-      img.Image? decoded = img.decodeImage(input);
-      if (decoded == null) return null;
-
-      img.Image working;
-      try {
-        working = img.bakeOrientation(decoded);
-      } catch (_) {
-        working = decoded;
-      }
-
-      // Pre-limit huge edges for memory usage
-      const int maxEdge = 3000;
-      if (working.width > maxEdge || working.height > maxEdge) {
-        final scale = maxEdge / (working.width > working.height ? working.width : working.height);
-        working = img.copyResize(
-          working,
-          width: (working.width * scale).round(),
-          height: (working.height * scale).round(),
-          interpolation: img.Interpolation.linear,
-        );
-      }
-
-      // PNG encode with level increases; then downscale if still too big
-      int level = 6;
-      Uint8List out = Uint8List.fromList(img.encodePng(working, level: level));
-      while (out.length > kRawBudgetForBase64 && level < 9) {
-        level++;
-        out = Uint8List.fromList(img.encodePng(working, level: level));
-      }
-
-      const int minDim = 640;
-      while (out.length > kRawBudgetForBase64 && (working.width > minDim && working.height > minDim)) {
-        final newW = (working.width * 0.85).round().clamp(1, working.width - 1);
-        final newH = (working.height * 0.85).round().clamp(1, working.height - 1);
-        working = img.copyResize(
-          working,
-          width: newW,
-          height: newH,
-          interpolation: img.Interpolation.linear,
-        );
-        level = 7;
-        out = Uint8List.fromList(img.encodePng(working, level: level));
-        while (out.length > kRawBudgetForBase64 && level < 9) {
-          level++;
-          out = Uint8List.fromList(img.encodePng(working, level: level));
-        }
-      }
-
-      if (out.length > kRawBudgetForBase64) return null;
-      return out;
-    } catch (_) {
-      return null;
-    }
+    return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(e);
   }
 
   void _selectForDelete(String id) => setState(() => _selectedId = id);
@@ -557,196 +892,219 @@ class _DocumentsPageState extends State<DocumentsPage> {
     if (_selectedId != null) setState(() => _selectedId = null);
   }
 
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
-    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
-  }
-
   void _snack(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   // ------------- Build -------------
+
+  Widget _buildEmptyState() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 60.0, horizontal: 24.0),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.file_copy_outlined, size: 60, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            const Text(
+              'No documents available',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black54),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Add a new document type above and upload a file.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final padding = width * 0.05;
     final fieldHeight = 50.0;
 
+    final listCount = _pending.length + _serverDocs.length;
+
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: brandBlue,
-        toolbarHeight: 80,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Row(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: Colors.white,
-              child: widget.customer.imageBytes != null
-                  ? ClipOval(
-                      child: Image.memory(
-                        widget.customer.imageBytes!,
-                        width: 40,
-                        height: 40,
-                        fit: BoxFit.cover,
-                      ),
-                    )
-                  : Text(
-                      _initials(widget.customer.name),
-                      style: TextStyle(color: brandBlue, fontWeight: FontWeight.bold, fontSize: 20),
-                    ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            expandedHeight: 80,
+            pinned: true,
+            backgroundColor: Colors.transparent,
+            automaticallyImplyLeading: false,
+            titleSpacing: 0,
+            title: Row(
               children: [
-                Text(widget.customer.name, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                Text(widget.customer.phone, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+                Expanded(child: _DocsAppBarTitle(customer: widget.customer)),
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: Colors.white),
+                  onPressed: _refreshFromServer,
+                  tooltip: 'Refresh',
+                ),
               ],
             ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _refreshFromServer,
-            tooltip: 'Refresh',
-          )
-        ],
-      ),
-      body: Column(
-        children: [
-          // Add Type field
-          Container(
-            height: fieldHeight,
-            margin: EdgeInsets.all(padding),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: borderColor),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: const [BoxShadow(color: Colors.black12, offset: Offset(1, 1), blurRadius: 2)],
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: TextField(
-                      controller: _typeCtrl,
-                      style: const TextStyle(color: Colors.black),
-                      decoration: const InputDecoration(
-                        hintText: 'Type',
-                        hintStyle: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
-                        border: InputBorder.none,
-                      ),
-                      onSubmitted: (_) => _addType(),
-                    ),
-                  ),
+            flexibleSpace: Container(
+              decoration: const BoxDecoration(
+                image: DecorationImage(
+                  image: AssetImage("assets/images/Background2.jpeg"),
+                  fit: BoxFit.cover,
                 ),
-                SizedBox(
+              ),
+            ),
+          ),
+
+          SliverToBoxAdapter(
+            child: Column(
+              children: [
+                // Add Type field
+                Container(
                   height: fieldHeight,
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: borderColor),
-                      foregroundColor: borderColor,
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: BorderRadius.only(topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
+                  margin: EdgeInsets.all(padding),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: borderColor),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: const [BoxShadow(color: Colors.black12, offset: Offset(1, 1), blurRadius: 2)],
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: TextField(
+                            controller: _typeCtrl,
+                            style: const TextStyle(color: Colors.black),
+                            decoration: const InputDecoration(
+                              hintText: 'Type',
+                              hintStyle: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+                              border: InputBorder.none,
+                            ),
+                            onSubmitted: (_) => _addType(),
+                          ),
+                        ),
                       ),
-                    ),
-                    onPressed: _addType,
-                    child: const Text('Add'),
+                      SizedBox(
+                        height: fieldHeight,
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: borderColor),
+                            foregroundColor: borderColor,
+                            shape: const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.only(topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
+                            ),
+                          ),
+                          onPressed: _addType,
+                          child: const Text('Add'),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
 
-          // Header
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: padding),
-            child: Row(
-              children: [
-                Text('Documents List', style: TextStyle(fontSize: width * 0.045, fontWeight: FontWeight.bold, color: borderColor)),
-                if (_loading) ...[
-                  const SizedBox(width: 8),
-                  const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                ],
-              ],
-            ),
-          ),
-          const Divider(height: 1, thickness: 1, color: Colors.black12),
+                // Header
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: padding),
+                  child: Row(
+                    children: [
+                      Text('Documents List', style: TextStyle(fontSize: width * 0.045, fontWeight: FontWeight.bold, color: borderColor)),
+                      if (_loading) ...[
+                        const SizedBox(width: 8),
+                        const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      ],
+                    ],
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Divider(height: 1, thickness: 1, color: Colors.black12),
+                ),
 
-          // List: Pending first, then server docs
-          Expanded(
-            child: ListView.separated(
-              padding: EdgeInsets.fromLTRB(padding, 10, padding, padding),
-              itemCount: _pending.length + _serverDocs.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final isPendingRow = index < _pending.length;
-                final d = isPendingRow ? _pending[index] : _serverDocs[index - _pending.length];
-                final selected = _selectedId == d.id;
+                if (listCount == 0 && !_loading)
+                  _buildEmptyState()
+                else
+                  ListView.separated(
+                    padding: EdgeInsets.fromLTRB(padding, 10, padding, padding),
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: listCount,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final isPendingRow = index < _pending.length;
+                      final d = isPendingRow ? _pending[index] : _serverDocs[index - _pending.length];
+                      final selected = _selectedId == d.id;
 
-                if (isPendingRow) {
-                  // Pending container with Upload
-                  return _DocCard(
-                    title: d.title,
-                    borderColor: borderColor,
-                    iconColor: iconColor,
-                    selected: selected,
-                    preview: null,
-                    showUpload: true,
-                    onTap: () {
-                      if (selected) _clearSelection();
-                    },
-                    onLongPress: () => _selectForDelete(d.id),
-                    onDelete: () {
-                      setState(() {
-                        _pending.removeWhere((x) => x.id == d.id);
-                        _selectedId = null;
-                      });
-                    },
-                    onUpload: () => _pickAndUpload(d),
-                    onDownload: null,
-                    onShare: null,
-                    onOpen: null,
-                  );
-                } else {
-                  // Server document container
-                  final isImage = _looksLikeImage(d.mimeType ?? d.remoteUrl ?? '');
-                  final preview = isImage && d.remoteUrl != null
-                      ? _ServerImagePreview(url: d.remoteUrl!)
-                      : null;
-
-                  return _DocCard(
-                    title: d.title,
-                    borderColor: borderColor,
-                    iconColor: iconColor,
-                    selected: selected,
-                    preview: preview,
-                    showUpload: false,
-                    onTap: () {
-                      if (selected) {
-                        _clearSelection();
+                      if (isPendingRow) {
+                        // Pending row (always visible)
+                        return hideIfDeleted(
+                          deletedSource: false,
+                          child: _DocCard(
+                            title: d.title,
+                            borderColor: borderColor,
+                            iconColor: iconColor,
+                            selected: selected,
+                            preview: null,
+                            showUpload: true,
+                            onTap: () {
+                              if (selected) _clearSelection();
+                            },
+                            onLongPress: () => _selectForDelete(d.id),
+                            onDelete: () {
+                              setState(() {
+                                _pending.removeWhere((x) => x.id == d.id);
+                                _selectedId = null;
+                              });
+                            },
+                            onUpload: () => _pickAndUpload(d),
+                            onDownload: null,
+                            onShare: null,
+                            onOpen: null,
+                          ),
+                        );
                       } else {
-                        _open(d);
+                        // Server doc row (hidden if deleted)
+                        final looksImage = _looksLikeImage(d.mimeType ?? d.remoteUrl ?? '');
+                        final preview = looksImage && d.remoteUrl != null
+                            ? (url: d.remoteUrl!)
+                            : null;
+
+                        return hideIfDeleted(
+                          deletedSource: _deletedById[d.id] ?? false,
+                          child: _DocCard(
+                            title: d.title,
+                            borderColor: borderColor,
+                            iconColor: iconColor,
+                            selected: selected,
+              
+                            showUpload: false,
+                            onTap: () {
+                              if (selected) {
+                                _clearSelection();
+                              } else {
+                                _open(d);
+                              }
+                            },
+                            onLongPress: () => _selectForDelete(d.id),
+                            onDelete: () => _deleteDoc(d),
+                            onUpload: null,
+                            onDownload: () => _download(d),
+                            onShare: () => _share(d),
+                            onOpen: () => _open(d),
+                          ),
+                        );
                       }
                     },
-                    onLongPress: () => _selectForDelete(d.id), // not deleting from server in this build
-                    onDelete: null,
-                    onUpload: null,
-                    onDownload: () => _download(d),
-                    onShare: () => _share(d),
-                    onOpen: () => _open(d),
-                  );
-                }
-              },
+                  ),
+              ],
             ),
           ),
         ],
@@ -759,6 +1117,80 @@ class _DocumentsPageState extends State<DocumentsPage> {
     if (lower.startsWith('image/')) return true;
     final ext = p.extension(lower);
     return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(ext);
+  }
+}
+
+// ---------------- AppBar title widget ----------------
+class _DocsAppBarTitle extends StatelessWidget {
+  const _DocsAppBarTitle({required this.customer});
+  final model.Customer customer;
+
+  String _initials(String name, String surname) {
+    final a = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '';
+    final b = surname.trim().isNotEmpty ? surname.trim()[0].toUpperCase() : '';
+    final s = (a + b).trim();
+    return s.isEmpty ? '?' : s;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ImageProvider? imgProvider;
+    if (customer.imageBytes != null && customer.imageBytes!.isNotEmpty) {
+      imgProvider = MemoryImage(customer.imageBytes!);
+    }
+
+    final fullName = '${customer.name}'.trim();
+
+    return Row(
+      children: [
+        CircleAvatar(
+          radius: 18,
+          backgroundColor: Colors.white24,
+          backgroundImage: imgProvider,
+          child: imgProvider == null
+              ? Text(
+                  _initials(customer.name, customer.surname),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                )
+              : null,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                fullName.isEmpty ? 'Customer' : fullName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  shadows: [Shadow(blurRadius: 6, color: Colors.black54, offset: Offset(1, 1))],
+                ),
+              ),
+              if (customer.phone.trim().isNotEmpty)
+                Text(
+                  customer.phone,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    shadows: [Shadow(blurRadius: 6, color: Colors.black54, offset: Offset(1, 1))],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -861,12 +1293,12 @@ class _DocCard extends StatelessWidget {
                   ),
                 ],
               ),
-              // Inline preview for images
+              // Inline preview for images (auto-removed when not available)
               if (preview != null) ...[
                 const SizedBox(height: 10),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: SizedBox(height: 160, width: double.infinity, child: preview),
+                  child: preview, // height handled within preview widget
                 ),
               ],
             ],
@@ -877,59 +1309,7 @@ class _DocCard extends StatelessWidget {
   }
 }
 
-class _ServerImagePreview extends StatefulWidget {
-  const _ServerImagePreview({required this.url});
-  final String url;
-
-  @override
-  State<_ServerImagePreview> createState() => _ServerImagePreviewState();
-}
-
-class _ServerImagePreviewState extends State<_ServerImagePreview> {
-  Uint8List? _bytes;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final token = await TokenStorage.getToken();
-      final res = await http.get(Uri.parse(widget.url), headers: {
-        'Accept': '*/*',
-        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
-      });
-      if (mounted) {
-        setState(() {
-          _bytes = (res.statusCode >= 200 && res.statusCode < 300) ? res.bodyBytes : null;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)));
-    }
-    if (_bytes == null || _bytes!.isEmpty) {
-      return Container(
-        color: Colors.grey.shade100,
-        alignment: Alignment.center,
-        child: const Text('Preview not available', style: TextStyle(color: Colors.black54)),
-      );
-    }
-    return Image.memory(_bytes!, fit: BoxFit.cover);
-  }
-}
-
-// ---------------- Viewers ----------------
+// Image viewer (local file path)
 class ImageViewerScreen extends StatelessWidget {
   const ImageViewerScreen({super.key, required this.path, required this.title});
   final String path;
@@ -949,6 +1329,7 @@ class ImageViewerScreen extends StatelessWidget {
   }
 }
 
+// PDF viewer (local file path)
 class PdfViewerScreen extends StatefulWidget {
   const PdfViewerScreen({super.key, required this.path, required this.title});
   final String path;

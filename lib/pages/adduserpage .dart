@@ -58,9 +58,6 @@ Map<String, dynamic> _unwrapApiPayload(dynamic raw) {
 }
 
 class AddNewUserPage extends StatefulWidget {
-  // Pass parentServerId when adding a child under a parent.
-  // Parent: parentServerId = null => ParentCustomerDataId will be null
-  // Child:  parentServerId != null => ParentCustomerDataId = parentServerId
   final int? parentServerId;
   final String? parentDisplay;
 
@@ -180,20 +177,35 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: typeController, decoration: const InputDecoration(labelText: "Type")),
-            TextField(controller: detailController, decoration: const InputDecoration(labelText: "Detail")),
+            TextField(
+              controller: typeController,
+              decoration: const InputDecoration(labelText: "Type"),
+            ),
+            TextField(
+              controller: detailController,
+              decoration: const InputDecoration(labelText: "Detail"),
+            ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text("Add")),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Add"),
+          ),
         ],
       ),
     );
 
     if (result == true) {
       setState(() {
-        _customEntries.add({"type": typeController.text.trim(), "detail": detailController.text.trim()});
+        _customEntries.add({
+          "type": typeController.text.trim(),
+          "detail": detailController.text.trim(),
+        });
       });
       await _saveCustomEntries();
     }
@@ -201,14 +213,22 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
   String? _dobIso8601Z() {
     if (_selectedDate == null) return null;
-    final dt = DateTime(_selectedDate!.year, _selectedDate!.month, _selectedDate!.day);
+    final dt = DateTime(
+      _selectedDate!.year,
+      _selectedDate!.month,
+      _selectedDate!.day,
+    );
     return dt.toUtc().toIso8601String();
   }
 
   String _othersAsString() {
     if (_customEntries.isEmpty) return "";
     return _customEntries
-        .where((e) => (e['type']?.trim().isNotEmpty ?? false) || (e['detail']?.trim().isNotEmpty ?? false))
+        .where(
+          (e) =>
+              (e['type']?.trim().isNotEmpty ?? false) ||
+              (e['detail']?.trim().isNotEmpty ?? false),
+        )
         .map((e) {
           final t = (e['type'] ?? '').trim();
           final d = (e['detail'] ?? '').trim();
@@ -234,7 +254,12 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         final scale = (w > h) ? maxDim / w : maxDim / h;
         final newW = (w * scale).round();
         final newH = (h * scale).round();
-        processed = img.copyResize(decoded, width: newW, height: newH, interpolation: img.Interpolation.cubic);
+        processed = img.copyResize(
+          decoded,
+          width: newW,
+          height: newH,
+          interpolation: img.Interpolation.cubic,
+        );
       }
 
       final png = img.encodePng(processed, level: kPngLevel);
@@ -350,7 +375,9 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     Map<String, dynamic>? httpFileData,
   }) async {
     final token = await TokenStorage.getToken();
-    final hasImage = (httpFileData != null) && (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
+    final hasImage =
+        (httpFileData != null) &&
+        (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
 
     final httpFilePayload = hasImage
         ? {
@@ -358,7 +385,8 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
             if (fileId != null) "FileId": fileId,
             "IsModified": true,
             "FileData": httpFileData["FileData"] ?? "",
-            "FileName": (httpFileData["FileName"] ?? "Profile_Image.png").toString(),
+            "FileName": (httpFileData["FileName"] ?? "Profile_Image.png")
+                .toString(),
             "FileType": (httpFileData["FileType"] ?? "image/png").toString(),
             "Remarks": (httpFileData["Remarks"] ?? "").toString(),
             "IsDeleted": false,
@@ -367,7 +395,8 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
     final payload = <String, dynamic>{
       "Id": id,
-      "ParentCustomerDataId": parentCustomerDataId, // null => parent; non-null => child
+      "ParentCustomerDataId":
+          parentCustomerDataId, // null => parent; non-null => child
       "Name": name,
       "Surname": surname,
       "PhoneNumber": phoneNumber,
@@ -381,7 +410,9 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       "HttpFileData": httpFilePayload,
     };
 
-    debugPrint('[Add] Using customerId=$id, parentId=$parentCustomerDataId, fileId=${hasImage ? fileId : null}');
+    debugPrint(
+      '[Add] Using customerId=$id, parentId=$parentCustomerDataId, fileId=${hasImage ? fileId : null}',
+    );
 
     final headers = <String, String>{
       "Content-Type": "application/json; charset=utf-8",
@@ -393,32 +424,45 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     try {
       final safePayload = Map<String, dynamic>.from(payload);
       if (safePayload['HttpFileData'] is Map) {
-        final fd = Map<String, dynamic>.from(safePayload['HttpFileData'] as Map);
+        final fd = Map<String, dynamic>.from(
+          safePayload['HttpFileData'] as Map,
+        );
         final b64 = (fd['FileData'] as String?);
-        fd['FileData'] = b64 == null ? "" : "<base64:${(b64.length / 1024).toStringAsFixed(1)}KB>";
+        fd['FileData'] = b64 == null
+            ? ""
+            : "<base64:${(b64.length / 1024).toStringAsFixed(1)}KB>";
         safePayload['HttpFileData'] = fd;
       }
       debugPrint('[Add] POST $url');
       debugPrint('[Add] Payload (safe): ${jsonEncode(safePayload)}');
+      
 
-      final res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(payload));
+      final res = await http.post(
+        Uri.parse(url),
+        headers: headers,
+        body: jsonEncode(payload),
+      );
       debugPrint('[Add] <- ${res.statusCode}');
       if (res.statusCode >= 200 && res.statusCode < 300) {
         if (res.body.trim().isEmpty) return {};
         final decoded = jsonDecode(res.body);
         if (decoded is Map<String, dynamic>) return decoded;
-        if (decoded is List && decoded.isNotEmpty && decoded.first is Map<String, dynamic>) {
+        if (decoded is List &&
+            decoded.isNotEmpty &&
+            decoded.first is Map<String, dynamic>) {
           return decoded.first as Map<String, dynamic>;
         }
         return {};
       }
-      final msg = _extractServerError(res.body) ?? 'Server error ${res.statusCode}';
+      final msg =
+          _extractServerError(res.body) ?? 'Server error ${res.statusCode}';
       throw Exception(msg);
     } catch (e) {
       debugPrint('[Add] POST failed: $e');
       rethrow;
     }
   }
+
 
   // Local-only id for cache (not for images)
   Future<int> _peekNextLocalCustomerId() async {
@@ -496,11 +540,15 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
   Future<void> _submit() async {
     if (_nameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Name is required")));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Name is required")));
       return;
     }
     if (_phoneController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Phone No is required")));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Phone No is required")));
       return;
     }
 
@@ -514,7 +562,11 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       if (await _isDuplicatePhoneLocal(phoneRaw)) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("This mobile number already exists locally. Please use a different number.")),
+          const SnackBar(
+            content: Text(
+              "This mobile number already exists locally. Please use a different number.",
+            ),
+          ),
         );
         return;
       }
@@ -524,7 +576,9 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       final generatedCustomerId = await _takeNextCustomerId();
 
       final httpFileData = await _buildHttpFileData();
-      final hasImage = httpFileData != null && (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
+      final hasImage =
+          httpFileData != null &&
+          (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
       final generatedFileId = hasImage ? await _takeNextFileId() : null;
 
       final dobIsoZ = _dobIso8601Z();
@@ -544,28 +598,34 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         dobIsoZ: dobIsoZ,
         fileId: generatedFileId,
         httpFileData: httpFileData != null
-            ? {
-                ...httpFileData,
-                "FileType": "image/png",
-              }
+            ? {...httpFileData, "FileType": "image/png"}
             : null,
       );
 
       final created = _unwrapApiPayload(serverResponse);
       final serverId =
-          _toInt(created['Id'] ?? created['CustomerDataMId'] ?? created['CustomerId'] ?? created['CustomerDataId']) ??
+          _toInt(
+            created['Id'] ??
+                created['CustomerDataMId'] ??
+                created['CustomerId'] ??
+                created['CustomerDataId'],
+          ) ??
           generatedCustomerId;
 
-      final fileId = _toInt(
+      final fileId =
+          _toInt(
             created['FileId'] ??
                 (created['HttpFileData'] is Map
-                    ? (created['HttpFileData']['Id'] ?? created['HttpFileData']['FileId'])
+                    ? (created['HttpFileData']['Id'] ??
+                          created['HttpFileData']['FileId'])
                     : null),
           ) ??
           (hasImage ? generatedFileId : null);
 
       await _ensureCounterAtLeast('next_server_customer_id', serverId);
-      if (fileId != null) await _ensureCounterAtLeast('next_server_file_id', fileId);
+      if (fileId != null) {
+        await _ensureCounterAtLeast('next_server_file_id', fileId);
+      }
 
       // For immediate UI only
       Uint8List? immediateBytes;
@@ -624,7 +684,9 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       Navigator.pop<model.Customer>(context, customer);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Submit failed: $e")));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Submit failed: $e")));
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -643,13 +705,19 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
             leading: const BackButton(color: Colors.white),
             title: const Text(
               "Add New Customer",
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             centerTitle: true,
             flexibleSpace: FlexibleSpaceBar(
               background: Container(
                 decoration: const BoxDecoration(
-                  image: DecorationImage(image: AssetImage("assets/images/Background2.jpeg"), fit: BoxFit.cover),
+                  image: DecorationImage(
+                    image: AssetImage("assets/images/Background2.jpeg"),
+                    fit: BoxFit.cover,
+                  ),
                 ),
                 child: Padding(
                   padding: EdgeInsets.symmetric(horizontal: kScreenPadding),
@@ -659,7 +727,11 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                       padding: const EdgeInsets.only(bottom: 12),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
-                        child: Image.asset("assets/images/logo2.png", height: 40, width: 60),
+                        child: Image.asset(
+                          "assets/images/logo2.png",
+                          height: 40,
+                          width: 60,
+                        ),
                       ),
                     ),
                   ),
@@ -670,7 +742,10 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
           SliverList(
             delegate: SliverChildListDelegate([
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
                 child: Column(
                   children: [
                     if (_isAddingChild)
@@ -703,26 +778,46 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                         child: CircleAvatar(
                           radius: 60,
                           backgroundColor: Colors.grey.shade200,
-                          backgroundImage: _imageFile != null ? FileImage(_imageFile!) : null,
-                          child: _imageFile == null ? const Icon(Icons.person, size: 40, color: Colors.grey) : null,
+                          backgroundImage: _imageFile != null
+                              ? FileImage(_imageFile!)
+                              : null,
+                          child: _imageFile == null
+                              ? const Icon(
+                                  Icons.person,
+                                  size: 40,
+                                  color: Colors.grey,
+                                )
+                              : null,
                         ),
                       ),
                     ),
                     const SizedBox(height: 30),
-                    TextField(controller: _nameController, decoration: _inputDecoration("Name")),
+                    TextField(
+                      controller: _nameController,
+                      decoration: _inputDecoration("Name"),
+                    ),
                     const Divider(color: Colors.black12),
-                    TextField(controller: _surnameController, decoration: _inputDecoration("Surname")),
+                    TextField(
+                      controller: _surnameController,
+                      decoration: _inputDecoration("Surname"),
+                    ),
                     const Divider(color: Colors.black12),
                     TextField(
                       controller: _dobController,
                       readOnly: true,
                       onTap: _pickDate,
                       decoration: _inputDecoration("Date of Birth").copyWith(
-                        suffixIcon: const Icon(Icons.keyboard_arrow_down, color: Colors.black54),
+                        suffixIcon: const Icon(
+                          Icons.keyboard_arrow_down,
+                          color: Colors.black54,
+                        ),
                       ),
                     ),
                     const Divider(color: Colors.black12),
-                    TextField(controller: _emailController, decoration: _inputDecoration("Email")),
+                    TextField(
+                      controller: _emailController,
+                      decoration: _inputDecoration("Email"),
+                    ),
                     const Divider(color: Colors.black12),
                     TextField(
                       controller: _phoneController,
@@ -730,10 +825,19 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                       decoration: _inputDecoration("Phone No"),
                     ),
                     const Divider(color: Colors.black12),
-                    TextField(controller: _addressController, decoration: _inputDecoration("Address")),
+                    TextField(
+                      controller: _addressController,
+                      decoration: _inputDecoration("Address"),
+                    ),
                     const Divider(color: Colors.black12),
                     const SizedBox(height: 20),
-                    const Align(alignment: Alignment.centerLeft, child: Text("Gender", style: TextStyle(color: Colors.grey))),
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        "Gender",
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
                     Row(
                       children: ["Male", "Female", "Other"].map((g) {
                         return Expanded(
@@ -742,7 +846,8 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                               Radio<String>(
                                 value: g,
                                 groupValue: _gender,
-                                onChanged: (val) => setState(() => _gender = val),
+                                onChanged: (val) =>
+                                    setState(() => _gender = val),
                                 activeColor: Colors.black87,
                               ),
                               Text(g),
@@ -755,12 +860,17 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                     ElevatedButton.icon(
                       onPressed: _showAddCustomEntryDialog,
                       icon: Icon(Icons.add, color: kPrimaryBlue),
-                      label: Text("Add Custom Entry", style: TextStyle(color: kPrimaryBlue)),
+                      label: Text(
+                        "Add Custom Entry",
+                        style: TextStyle(color: kPrimaryBlue),
+                      ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         elevation: 0,
                         side: const BorderSide(color: kPrimaryBlue),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -792,14 +902,19 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            image: const DecorationImage(image: AssetImage("assets/images/Background2.jpeg"), fit: BoxFit.cover),
+            image: const DecorationImage(
+              image: AssetImage("assets/images/Background2.jpeg"),
+              fit: BoxFit.cover,
+            ),
           ),
           child: ElevatedButton(
             onPressed: _isSubmitting ? null : _submit,
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.transparent,
               shadowColor: Colors.transparent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -807,12 +922,33 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                   ? const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                        SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
                         SizedBox(width: 10),
-                        Text("Submitting...", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                        Text(
+                          "Submitting...",
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
                       ],
                     )
-                  : const Text("Submit", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                  : const Text(
+                      "Submit",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
             ),
           ),
         ),

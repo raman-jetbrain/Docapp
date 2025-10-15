@@ -7,7 +7,8 @@ import 'package:docapp/descriptionpage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/familydetailspage.dart';
 import 'package:docapp/model/customer.dart' as model;
-import 'package:docapp/utils/customer_utility.dart';
+import 'package:docapp/utils/customer_utility.dart'; // <-- use shared resolver/widgets
+import 'package:docapp/utils/detailsprofile.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
@@ -315,9 +316,6 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
   Widget build(BuildContext context) {
     final primaryColor = const Color(0xFF38B6E4);
 
-    // Use shared resolver so all pages display the same image
-    final headerImage = customerImageProvider(_customerForChildren);
-
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F2),
       body: CustomScrollView(
@@ -355,16 +353,18 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (headerImage != null)
-                    Image(
-                      image: headerImage,
-                      fit: BoxFit.cover,
-                    )
-                  else
-                    Container(
+                  CustomerPhoto(
+                    customer: _customerForChildren,
+                    fit: BoxFit.cover,
+                    placeholder: Container(
                       color: primaryColor.withOpacity(0.8),
-                      child: Icon(Icons.person, size: 120, color: Colors.white.withOpacity(0.6)),
+                      child: Icon(
+                        Icons.person,
+                        size: 120,
+                        color: Colors.white.withOpacity(0.6),
+                      ),
                     ),
+                  ),
                   Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
