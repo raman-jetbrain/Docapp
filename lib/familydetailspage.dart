@@ -9,7 +9,6 @@ import 'package:docapp/storage/Token_storage.dart';
 import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/documentspage.dart';
-import 'package:docapp/utils/customer_utility.dart';
 
 // ========== Logging helpers ==========
 const bool kLogHttp = true;
@@ -187,8 +186,12 @@ class _FamilyPageState extends State<FamilyPage> {
       }
     }
     addMember(_parent);
-    for (final c in _serverChildren) addMember(c);
-    for (final f in _family) addMember(f);
+    for (final c in _serverChildren) {
+      addMember(c);
+    }
+    for (final f in _family) {
+      addMember(f);
+    }
     return out;
   }
 

@@ -7,7 +7,6 @@ import 'package:docapp/descriptionpage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/familydetailspage.dart';
 import 'package:docapp/model/customer.dart' as model;
-import 'package:docapp/utils/customer_utility.dart'; // <-- use shared resolver/widgets
 import 'package:docapp/utils/detailsprofile.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -386,7 +385,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.customer.name,
+                          widget.customer.surname,
                           style: const TextStyle(
                             fontSize: 28,
                             fontWeight: FontWeight.bold,
@@ -403,7 +402,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                         if (widget.customer.surname.isNotEmpty) ...[
                           const SizedBox(height: 4),
                           Text(
-                            widget.customer.surname,
+                            widget.customer.name,
                             style: const TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.w500,

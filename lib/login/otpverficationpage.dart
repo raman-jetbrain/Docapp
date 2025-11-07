@@ -3,13 +3,12 @@ import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/dashboardpage.dart';
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:get/route_manager.dart';
 import 'package:http/http.dart' as http;
 import 'package:pinput/pinput.dart';
 
 class OTPVerificationView extends StatefulWidget {
   final String mobileNumber;
-  final String otpMessage; // Message returned from login API
+  final String otpMessage;
 
   const OTPVerificationView({
     super.key,
@@ -48,19 +47,16 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
       final baseUrl = ApiConstants.baseUrl;
       final url = Uri.parse("$baseUrl/api/Auth/OtpVerification");
 
-      // ✅ Get Login token saved earlier (from LoginV2)
+      // Get the token saved during LoginV2 (temporary or actual)
       final loginToken = await TokenStorage.getToken();
       if (loginToken == null || loginToken.isEmpty) {
-        setState(() =>
-            apiMessage = "No session token found. Please login again.");
+        setState(
+          () => apiMessage = "No session token found. Please login again.",
+        );
         return;
       }
 
-      final body = {
-        "Token": loginToken,
-        "OTP": otp,
-        "IsUser": true,
-      };
+      final body = {"Token": loginToken, "OTP": otp, "IsUser": true};
 
       final res = await http.post(
         url,
@@ -70,46 +66,42 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
         },
         body: jsonEncode(body),
       );
-
-      debugPrint("👉 OTP Response ${res.statusCode}: ${res.body}");
+      debugPrint(res.body);
 
       if (!mounted) return;
 
-      final Map<String, dynamic> data =
-          jsonDecode(res.body) as Map<String, dynamic>;
-
-      final bool success =
-          (res.statusCode == 200 && (data["Status"] == true));
-
-      if (success) {
-
-        final verifiedToken = _extractToken(data);
-        if (verifiedToken != null && verifiedToken.isNotEmpty) {
-          await TokenStorage.saveToken(verifiedToken);
-          debugPrint("✅ Saved verified token: $verifiedToken");
-        } else {
-          // ✅ fallback keep login token
-          await TokenStorage.saveToken(loginToken);
-        }
-
+      Map<String, dynamic>? data;
+      try {
+        data = jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {
+        data = null;
       }
-         if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => Dashboardpage()),
-        (route) => false,
-      );
 
-      // ❌ Not successful → show message
-      final errorMsg = (data["Message"] ??
-              data["ErrorMessage"] ??
-              data["Response"]?.toString() ??
-              "OTP Verification failed")
-          .toString();
+      final ok =
+          res.statusCode == 200 &&
+          (data?["Status"] == true || data?["status"] == true);
 
-      setState(() {
-        apiMessage = errorMsg;
-      });
+      if (ok) {
+        final verifiedToken = _extractToken(data ?? {}) ?? loginToken;
+        await TokenStorage.saveToken(verifiedToken);
+
+        if (!mounted) return;
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const Dashboardpage()),
+          (route) => false,
+        );
+        return;
+      }
+
+      final errorMsg =
+          (data?["Message"] ??
+                  data?["ErrorMessage"] ??
+                  data?["Response"]?.toString() ??
+                  "OTP Verification failed")
+              .toString();
+
+      setState(() => apiMessage = errorMsg);
     } catch (e) {
       if (!mounted) return;
       setState(() => apiMessage = "❌ Error: $e");
@@ -119,7 +111,6 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
     }
   }
 
-  /// Extract token from server response
   String? _extractToken(Map<String, dynamic> data) {
     if (data["Response"] is String) return data["Response"];
     if (data["token"] is String) return data["token"];
@@ -154,7 +145,7 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black),
-          onPressed: () => Get.back(),
+          onPressed: () => Navigator.pop(context),
         ),
       ),
       body: Padding(
@@ -164,15 +155,18 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
           children: [
             const SizedBox(height: 80),
             Center(
-              child: Image.asset("assets/images/verification.jpg", height: 180),
+              child: Icon(
+                Icons.verified_user,
+                size: 120,
+                color: Colors.blue.shade400,
+              ),
             ),
             const SizedBox(height: 20),
             Text(
               widget.otpMessage.isNotEmpty
                   ? widget.otpMessage
                   : "Enter the OTP sent to ${widget.mobileNumber}",
-              style:
-                  const TextStyle(fontSize: 16, color: Colors.blueGrey),
+              style: const TextStyle(fontSize: 16, color: Colors.blueGrey),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 30),
@@ -186,6 +180,7 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
+              onCompleted: (_) => verifyOtp(),
             ),
             const SizedBox(height: 12),
             if (apiMessage.isNotEmpty)
@@ -203,8 +198,7 @@ class _OTPVerificationViewState extends State<OTPVerificationView> {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                padding:
-                    const EdgeInsets.symmetric(vertical: 16),
+                padding: const EdgeInsets.symmetric(vertical: 16),
               ),
               child: isLoading
                   ? const CircularProgressIndicator(color: Colors.white)

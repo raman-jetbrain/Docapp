@@ -1,158 +1,24 @@
 import 'dart:convert';
-import 'package:docapp/api/api_constant.dart';
+import 'package:docapp/CustomDrawerPage.dart';
+import 'package:docapp/anniversaryevent.dart';
+import 'package:docapp/api/customer_api_service.dart';
+import 'package:docapp/api/description_api.dart';
+import 'package:docapp/login/Loginpage.dart';
 import 'package:docapp/customerpage.dart';
 import 'package:docapp/dateventspage.dart';
-import 'package:docapp/login/Loginpage.dart';
-import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/pages/adduserpage%20.dart';
-import 'package:docapp/storage/Token_storage.dart';
+import 'package:docapp/postereditpage.dart';
+import 'package:docapp/birthdaylist.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 
-class CustomerApiService {
-  final String baseUrl = ApiConstants.baseUrl;
-  final http.Client _client;
-
-  static const bool _enableHttpLog = true;
-
-  CustomerApiService({http.Client? client}) : _client = client ?? http.Client();
-
-  // Handles both sync and async TokenStorage.getToken() implementations
-  Future<String?> _resolveToken() async {
-    final Object? maybeFuture = TokenStorage.getToken();
-    if (maybeFuture is Future) {
-      final t = await maybeFuture;
-      return t as String?;
-    }
-    return maybeFuture as String?;
-  }
-
-  Uri _buildUri(String base, String path) {
-    final normalizedBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
-    final normalizedPath = path.startsWith('/') ? path : '/$path';
-    return Uri.parse('$normalizedBase$normalizedPath');
-  }
-
-  // --- Logging helpers ---
-  void _logRequest({
-    required String method,
-    required Uri uri,
-    Map<String, String>? headers,
-    String? body,
-  }) {
-    if (!_enableHttpLog) return;
-    debugPrint('[HTTP] $method $uri');
-    if (headers != null) debugPrint('[HTTP] Headers: ${jsonEncode(headers)}');
-    if (body != null && body.isNotEmpty) debugPrint('[HTTP] Body: $body');
-  }
-
-  void _logResponse(http.Response resp) {
-    if (!_enableHttpLog) return;
-    debugPrint('[HTTP] <- ${resp.statusCode} ${resp.request?.url}');
-    debugPrint('[HTTP] Response body: ${resp.body}');
-  }
-
-  // --- GET customers ---
-  Future<List<model.Customer>> getCustomers() async {
-    final token = await _resolveToken();
-    if (token == null || token.isEmpty) {
-      debugPrint('[CustomerApi] Missing auth token');
-      throw Exception('Missing auth token');
-    }
-
-    final uri = _buildUri(baseUrl, '/api/CustomerDataM/GetAsync');
-    final headers = {
-      'Accept': 'application/json',
-      'Authorization': 'Bearer $token',
-    };
-
-    _logRequest(method: 'GET', uri: uri, headers: headers);
-    final resp = await _client.get(uri, headers: headers);
-    _logResponse(resp);
-
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw Exception('GET ${uri.path} failed: ${resp.statusCode} ${resp.body}');
-    }
-
-    final decoded = json.decode(resp.body);
-
-    // Your API uses "Response"
-    final List<dynamic> list =
-        decoded is Map && decoded['Response'] is List
-            ? decoded['Response'] as List
-            : (decoded is List ? decoded : const []);
-
-    final customers = list
-        .map((e) => _mapApiToCustomer(Map<String, dynamic>.from(e as Map)))
-        .toList();
-
-    // De-duplicate by phone
-    final seen = <String>{};
-    final unique = <model.Customer>[];
-    for (final c in customers) {
-      if (seen.add(c.phone)) unique.add(c);
-    }
-
-    debugPrint('[CustomerApi] Mapped customers: ${unique.length}');
-    return unique;
-  }
-
-  // Map exact keys from your payload + optional base64 image
-  model.Customer _mapApiToCustomer(Map<String, dynamic> m) {
-    String first = (m['Name'] ?? '').toString().trim();
-    String last  = (m['Surname'] ?? '').toString().trim();
-
-    // If Name contains full name and Surname is empty, split
-    if (last.isEmpty && first.contains(' ')) {
-      final parts = first.split(RegExp(r'\s+'));
-      first = parts.isNotEmpty ? parts.first : '';
-      last = parts.length > 1 ? parts.sublist(1).join(' ') : '';
-    }
-
-    final phone   = (m['PhoneNumber'] ?? '').toString().trim();
-    final email   = (m['EmailId'] ?? '').toString().trim();
-    final address = (m['Address'] ?? '').toString().trim();
-    final gender  = (m['Gender'] ?? '').toString().trim();
-    final others  = (m['Others'] ?? '').toString().trim();
-
-    // Optional: base64 image via HttpFileData.FileData
-    dynamic bytes;
-    final httpFile = m['HttpFileData'];
-    if (httpFile is Map && httpFile['FileData'] is String) {
-      final b64 = (httpFile['FileData'] as String).trim();
-      if (b64.isNotEmpty) {
-        try {
-          bytes = base64Decode(b64); // Uint8List
-        } catch (_) {
-          // ignore invalid base64
-        }
-      }
-    }
-
-    // If you have DOB in API, add it here and to your model
-    // final dob = (m['DOB'] ?? m['DateOfBirth'] ?? '').toString().trim();
-
-    return model.Customer.fromMap({
-      'name': first,
-      'surname': last,
-      'phone': phone,
-      'email': email,
-      'address': address,
-      'gender': gender,
-      'others': others,
-      'imageBytes': bytes, // null unless FileData provided
-      // 'dob': dob, // enable if your model supports it
-    });
-  }
-}
-
-// Colors
 const kPrimaryBlue = Color(0xFF3B5998);
 
 class Dashboardpage extends StatefulWidget {
   const Dashboardpage({super.key});
+
+  
 
   @override
   State<Dashboardpage> createState() => _DashboardpageState();
@@ -161,6 +27,26 @@ class Dashboardpage extends StatefulWidget {
 class _DashboardpageState extends State<Dashboardpage> {
   int _customerCount = 0;
   int _birthdayCount = 0;
+  int _anniversaryCount = 0;
+
+  static const List<String> _dobKeys = [
+    'dob',
+    'DOB',
+    'dateOfBirth',
+    'birthdate',
+    'birthDate',
+    'date_of_birth',
+    'birthday',
+  ];
+  static const List<String> _annivKeys = [
+    'anniversary',
+    'anniversaryDate',
+    'wedding_anniversary',
+    'doa',
+    'dom',
+    'dateOfAnniversary',
+    'marriageDate',
+  ];
 
   @override
   void initState() {
@@ -168,119 +54,232 @@ class _DashboardpageState extends State<Dashboardpage> {
     _loadCustomerData();
   }
 
-  Future<void> _loadCustomerData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? customersJson = prefs.getString('customers');
-    if (customersJson != null) {
-      final List<dynamic> customersList = json.decode(customersJson);
+  List<Map<String, dynamic>> _decodeCustomers(String jsonStr) {
+    final List<Map<String, dynamic>> out = [];
+    dynamic decoded;
+    try {
+      decoded = json.decode(jsonStr);
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Dashboard] JSON decode error: $e');
+      return out;
+    }
 
-      int birthdayCount = 0;
-      final now = DateTime.now();
-
-      for (var customerMap in customersList) {
-        final dobString = customerMap['dob'] as String? ?? '';
-        if (dobString.isNotEmpty) {
-          try {
-            final parts = dobString.split('/');
-            if (parts.length >= 2) {
-              final day = int.parse(parts[0]);
-              final month = int.parse(parts[1]);
-              if (day == now.day && month == now.month) {
-                birthdayCount++;
-              }
-            }
-          } catch (_) {}
+    void addList(dynamic v) {
+      if (v is List) {
+        for (final e in v) {
+          if (e is Map) out.add(Map<String, dynamic>.from(e));
         }
       }
+    }
 
-      if (mounted) {
-        setState(() {
-          _customerCount = customersList.length;
-          _birthdayCount = birthdayCount;
-        });
+    if (decoded is List) {
+      addList(decoded);
+    } else if (decoded is Map) {
+      final m = Map<String, dynamic>.from(decoded);
+      final candidates = ['customers', 'data', 'items', 'list', 'result'];
+      bool added = false;
+      for (final k in candidates) {
+        if (m[k] is List) {
+          addList(m[k]);
+          added = true;
+          break;
+        }
       }
-    } else {
+      if (!added) {
+        out.add(m);
+      }
+    }
+    return out;
+  }
+
+  String? _toDateString(dynamic v) {
+    if (v == null) return null;
+    if (v is String) return v.trim();
+    if (v is int) return v.toString();
+    if (v is double) return v.toInt().toString();
+    if (v is Map) {
+      final ms = v['milliseconds'] ?? v['millis'] ?? v['ms'];
+      if (ms != null) return ms.toString();
+      final sec = v['seconds'] ?? v['secs'] ?? v['s'];
+      if (sec != null) {
+        final s = int.tryParse(sec.toString());
+        if (s != null) return (s * 1000).toString();
+      }
+    }
+    return v.toString();
+  }
+
+  String? _firstDateByKeys(Map<String, dynamic> m, List<String> keys) {
+    for (final k in keys) {
+      if (m.containsKey(k) && m[k] != null) {
+        return _toDateString(m[k]);
+      }
+    }
+    return null;
+  }
+
+  bool _isTodayMonthDay(String? raw) {
+    final dt = _parseDateFlex(raw);
+    if (dt == null) return false;
+    final now = DateTime.now();
+    return dt.day == now.day && dt.month == now.month;
+  }
+
+  DateTime? _parseDateFlex(String? raw) {
+    if (raw == null) return null;
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+
+    if (RegExp(r'^\d+$').hasMatch(s)) {
+      final n = int.tryParse(s);
+      if (n != null) {
+        if (s.length >= 12) return DateTime.fromMillisecondsSinceEpoch(n);
+        if (s.length == 10)
+          return DateTime.fromMillisecondsSinceEpoch(n * 1000);
+      }
+    }
+
+    final iso = DateTime.tryParse(s);
+    if (iso != null) return iso.isUtc ? iso.toLocal() : iso;
+
+    final norm = s.replaceAll('/', '-').replaceAll('.', '-');
+    final parts = norm.split('-').where((e) => e.trim().isNotEmpty).toList();
+
+    if (parts.length >= 3) {
+      if (parts[0].length == 4) {
+        final y = int.tryParse(parts[0]) ?? 0;
+        final m = int.tryParse(parts[1]) ?? 0;
+        final d = int.tryParse(parts[2]) ?? 0;
+        if (y > 0 && m > 0 && d > 0) return DateTime(y, m, d);
+      } else {
+        final d = int.tryParse(parts[0]) ?? 0;
+        final m = int.tryParse(parts[1]) ?? 0;
+        int y = int.tryParse(parts[2]) ?? 0;
+        if (y > 0 && y < 100) y += 2000;
+        if (y > 0 && m > 0 && d > 0) return DateTime(y, m, d);
+      }
+    }
+
+    if (parts.length >= 2) {
+      final now = DateTime.now();
+      final d = int.tryParse(parts[0]) ?? 0;
+      final m = int.tryParse(parts[1]) ?? 0;
+      if (m > 0 && d > 0) return DateTime(now.year, m, d);
+    }
+
+    final nums = RegExp(r'\d+').allMatches(s).map((m) => m.group(0)!).toList();
+    if (nums.length >= 3 && nums[0].length == 4) {
+      final y = int.tryParse(nums[0]) ?? 0;
+      final m = int.tryParse(nums[1]) ?? 0;
+      final d = int.tryParse(nums[2]) ?? 0;
+      if (y > 0 && m > 0 && d > 0) return DateTime(y, m, d);
+    } else if (nums.length >= 2) {
+      final now = DateTime.now();
+      final d = int.tryParse(nums[0]) ?? 0;
+      final m = int.tryParse(nums[1]) ?? 0;
+      if (m > 0 && d > 0) return DateTime(now.year, m, d);
+    }
+
+    return null;
+  }
+
+  var customer = CustomerApiService();
+
+  Future<void> _loadCustomerData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final customersJson = prefs.getString('customers');
+
+    if (customersJson == null || customersJson.trim().isEmpty) {
       if (mounted) {
         setState(() {
           _customerCount = 0;
           _birthdayCount = 0;
+          _anniversaryCount = 0;
         });
       }
+      if (kDebugMode) debugPrint('[Dashboard] No stored customers.');
+      return;
+    }
+
+    final customers = _decodeCustomers(customersJson);
+
+    int birthdayCount = 0;
+    int anniversaryCount = 0;
+
+    for (final m in customers) {
+      final dob = _firstDateByKeys(m, _dobKeys);
+      if (_isTodayMonthDay(dob)) birthdayCount++;
+
+      final anniv = _firstDateByKeys(m, _annivKeys);
+      if (_isTodayMonthDay(anniv)) anniversaryCount++;
+    }
+
+    if (mounted) {
+      setState(() {
+        _customerCount = customers.length;
+        _birthdayCount = birthdayCount;
+        _anniversaryCount = anniversaryCount;
+      });
+    }
+
+    if (kDebugMode) {
+      debugPrint(
+        '[Dashboard] customers=$_customerCount birthdays=$_birthdayCount anniversaries=$_anniversaryCount',
+      );
     }
   }
 
   Future<void> _navigateToCustomerScreen() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const CustomerScreen()),
-    );
-    if (mounted) {
-      _loadCustomerData();
-    }
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const CustomerScreen()));
+    if (mounted) _loadCustomerData();
   }
 
   Future<void> _navigateTodayEventsPage() async {
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const CalendarApp()),
+      MaterialPageRoute(builder: (_) => BirthdayPage()),
     );
-    if (mounted) {
-      _loadCustomerData();
-    }
+    if (mounted) _loadCustomerData();
+  }
+
+  // Navigate to Anniversary poster page
+  Future<void> _navigateEventsPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const BirthdayPage(),
+      ), // no customer required
+    );
+    if (mounted) _loadCustomerData();
   }
 
   Future<void> _navigateToAddUserPage() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const AddNewUserPage()),
-    );
-    if (mounted) {
-      _loadCustomerData();
-    }
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const AddNewUserPage()));
+    if (mounted) _loadCustomerData();
   }
 
-Future<void> _logout() async {
-  final confirm = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Logout'),
-      content: const Text('Are you sure you want to logout?'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false), // return false
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-          onPressed: () => Navigator.pop(ctx, true), // return true (FIXED)
-          child: const Text('Logout', style: TextStyle(color: Colors.white)),
-        ),
-      ],
-    ),
-  );
+  Future<void> _navigateToCustomerDrawerPage() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => AppDrawer()));
+    if (mounted) _loadCustomerData();
+  }
 
-  if (confirm != true) return;
-
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    // Remove your token(s) and any session-related data
-    await prefs.remove('token');
-    await prefs.remove('jwt');
-    await prefs.remove('access_token');
-    await prefs.remove('bearer');
-    await prefs.remove('last_user');
-
-    // Optional: clear cached data so next session starts clean
-    await prefs.remove('customers');
-    await prefs.remove('user_name');
-    await prefs.remove('user_image_base64');
-  } catch (_) {}
-
-  if (!mounted) return;
-
-  // Option A: Use direct page navigation (no named routes needed)
-  Navigator.of(context).pushAndRemoveUntil(
-    MaterialPageRoute(builder: (_) => const LoginView()),
-    (route) => false,
-  );
-}
+  Future<void> _handleLogout() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('auth_token');
+      await prefs.remove('refresh_token');
+    } catch (_) {}
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => LoginView()),
+      (route) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -295,7 +294,6 @@ Future<void> _logout() async {
           flexibleSpace: Stack(
             fit: StackFit.expand,
             children: [
-              // Background Image
               Container(
                 decoration: const BoxDecoration(
                   image: DecorationImage(
@@ -306,8 +304,10 @@ Future<void> _logout() async {
               ),
               SafeArea(
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 10,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -327,7 +327,7 @@ Future<void> _logout() async {
                           const SizedBox(width: 15),
                           const Expanded(
                             child: Text(
-                              'Maruthi \nInsurance care,',
+                              'Maruthi \nInsure care,',
                               style: TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.bold,
@@ -355,8 +355,6 @@ Future<void> _logout() async {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 30),
-              // _buildEventsSection(),
-              const SizedBox(height: 30),
               _buildQuickActionsSection(),
               const SizedBox(height: 30),
               _buildCustomerStatsSection(),
@@ -366,56 +364,6 @@ Future<void> _logout() async {
         ),
       ),
       bottomNavigationBar: _buildBottomNavigationBar(),
-    );
-  }
-
-  Widget _buildEventCard(
-    String title,
-    String count,
-    IconData icon,
-    Color color,
-    VoidCallback onTap,
-  ) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 150,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 5),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Icon(icon, size: 40, color: kPrimaryBlue),
-            Text(
-              count,
-              style: const TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.black.withOpacity(0.6),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -549,7 +497,7 @@ Future<void> _logout() async {
 
   Widget _buildBottomNavigationBar() {
     final screenWidth = MediaQuery.of(context).size.width;
-    final navHeight = screenWidth * 0.18; // responsive height (~65–80px)
+    final navHeight = screenWidth * 0.18;
 
     return SafeArea(
       minimum: const EdgeInsets.only(bottom: 12),
@@ -574,7 +522,7 @@ Future<void> _logout() async {
             _buildNavBarItem(Icons.group, 'Customers', false),
             _buildNavBarItem(Icons.add_circle, 'Add', false),
             _buildNavBarItem(Icons.notifications, 'Events', false),
-            _buildNavBarItem(Icons.logout, 'Logout', false), // Logout kept, Menu removed
+            _buildNavBarItem(Icons.logout, 'Logout', false),
           ],
         ),
       ),
@@ -583,8 +531,8 @@ Future<void> _logout() async {
 
   Widget _buildNavBarItem(IconData icon, String label, bool isSelected) {
     final screenWidth = MediaQuery.of(context).size.width;
-    final iconSize = screenWidth * 0.07; // responsive icon (~26-32px)
-    final fontSize = screenWidth * 0.03; // responsive text (~12px)
+    final iconSize = screenWidth * 0.07;
+    final fontSize = screenWidth * 0.03;
 
     return InkWell(
       onTap: () {
@@ -593,9 +541,9 @@ Future<void> _logout() async {
         } else if (label == 'Add') {
           _navigateToAddUserPage();
         } else if (label == 'Events') {
-          _navigateTodayEventsPage();
+          _navigateEventsPage(); // go to Anniversary poster page
         } else if (label == 'Logout') {
-          _logout();
+          _handleLogout();
         }
       },
       child: Column(
@@ -617,6 +565,248 @@ Future<void> _logout() async {
           ),
         ],
       ),
+    );
+  }
+}
+
+class Customer {
+  // Core
+  final String name;
+  final String surname;
+  final String phone;
+  final String email;
+  final String address;
+  final String dob; // UI-friendly DOB text (not ISO) for your current screens
+  final String gender;
+
+  // Extras
+  final List<Map<String, String>> customEntries;
+  final String? others; // may contain data URL: data:image/png;base64,....
+  final String? photo; // local photo path (if any)
+
+  // Image handling
+  final Uint8List? imageBytes; // in-memory bytes for immediate UI
+  final String? imageB64; // base64 persisted in storage
+
+  // IDs
+  final String? id; // optional unified id (string), may mirror serverId
+  final String? serverId; // server-side ID (string)
+  final int? fileId; // FileId from server (int)
+  final int? localId; // local auto-increment id (for caching only)
+
+  Customer({
+    required this.name,
+    required this.surname,
+    required this.phone,
+    required this.email,
+    required this.address,
+    required this.dob,
+    required this.gender,
+    required this.customEntries,
+    this.others,
+    this.photo,
+    this.imageBytes,
+    this.imageB64,
+    this.id,
+    this.serverId,
+    this.fileId,
+    this.localId,
+  });
+
+  // -------- Helpers --------
+
+  static String? _stringOrNull(dynamic v) {
+    if (v == null) return null;
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  static int? _toInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is double) return v.toInt();
+    return int.tryParse(v.toString());
+  }
+
+  static Uint8List? _decodeB64Image(dynamic v) {
+    if (v == null) return null;
+    var s = v.toString().trim();
+    if (s.isEmpty) return null;
+
+    // Allow data URLs: data:image/png;base64,xxxx
+    final commaIndex = s.indexOf(',');
+    if (commaIndex != -1 &&
+        s.substring(0, commaIndex).toLowerCase().contains('base64')) {
+      s = s.substring(commaIndex + 1);
+    }
+
+    // Remove whitespace/newlines
+    s = s.replaceAll(RegExp(r'\s'), '');
+    try {
+      return base64Decode(base64.normalize(s));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<Map<String, String>> _coerceCustomEntries(dynamic v) {
+    if (v is List) {
+      return v.map<Map<String, String>>((e) {
+        if (e is Map) {
+          return e.map(
+            (k, val) => MapEntry(k.toString(), val?.toString() ?? ''),
+          );
+        }
+        return <String, String>{};
+      }).toList();
+    }
+    return <Map<String, String>>[];
+  }
+
+  // -------- Mapping --------
+
+  factory Customer.fromMap(Map<String, dynamic> m) {
+    // Resolve IDs
+    final String? idStr = _stringOrNull(
+      m['id'] ??
+          m['Id'] ??
+          m['ID'] ??
+          m['CustomerId'] ??
+          m['CustomerID'] ??
+          m['CustomerDataMId'] ??
+          m['CustomerDataMID'] ??
+          m['CustomerDataId'] ??
+          m['CustomerDataID'],
+    );
+
+    final String? serverId = _stringOrNull(
+      m['serverId'] ?? m['ServerId'] ?? m['ServerID'] ?? idStr,
+    );
+
+    // Resolve FileId (if present)
+    final dynamic httpFile = m['HttpFileData'] ?? m['httpFileData'];
+    final int? fileId = _toInt(
+      m['fileId'] ??
+          m['FileId'] ??
+          (httpFile is Map ? (httpFile['Id'] ?? httpFile['FileId']) : null),
+    );
+
+    // Resolve image bytes from multiple possible sources
+    Uint8List? bytes;
+    // 1) direct imageBytes (bytes or base64 string)
+    final dynamic imgField = m['imageBytes'];
+    if (imgField is Uint8List && imgField.isNotEmpty) {
+      bytes = imgField;
+    } else if (imgField is String && imgField.isNotEmpty) {
+      bytes = _decodeB64Image(imgField);
+    }
+
+    // 2) imageB64 (base64 string)
+    String? imageB64 = _stringOrNull(m['imageB64']);
+    if (bytes == null && imageB64 != null) {
+      bytes = _decodeB64Image(imageB64);
+    }
+
+    // 3) Others may contain a data URL
+    final String? others = _stringOrNull(m['others'] ?? m['Others']);
+    if (bytes == null && others != null && others.startsWith('data:image')) {
+      bytes = _decodeB64Image(others);
+    }
+
+    // If we decoded bytes but had no imageB64, create one for persistence
+    imageB64 ??= (bytes != null && bytes.isNotEmpty)
+        ? base64Encode(bytes)
+        : null;
+
+    return Customer(
+      name: _stringOrNull(m['name'] ?? m['Name']) ?? '',
+      surname: _stringOrNull(m['surname'] ?? m['Surname']) ?? '',
+      phone: _stringOrNull(m['phone'] ?? m['Phone'] ?? m['PhoneNumber']) ?? '',
+      email: _stringOrNull(m['email'] ?? m['Email'] ?? m['EmailId']) ?? '',
+      address: _stringOrNull(m['address'] ?? m['Address']) ?? '',
+      dob: _stringOrNull(m['dob'] ?? m['DOB'] ?? m['SDOB']) ?? '',
+      gender: _stringOrNull(m['gender'] ?? m['Gender']) ?? '',
+      customEntries: _coerceCustomEntries(m['customEntries']),
+      others: others,
+      photo: _stringOrNull(m['photo']),
+      imageBytes: bytes,
+      imageB64: imageB64,
+      id: idStr,
+      serverId: serverId,
+      fileId: fileId,
+      localId: _toInt(m['localId']),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    // Prefer to include imageB64 (safe for JSON). Avoid raw imageBytes in JSON.
+    final String? outB64 =
+        imageB64 ??
+        (imageBytes != null && imageBytes!.isNotEmpty
+            ? base64Encode(imageBytes!)
+            : null);
+
+    return <String, dynamic>{
+      // IDs
+      if (id != null) 'id': id,
+      if (serverId != null) 'serverId': serverId,
+      if (fileId != null) 'fileId': fileId,
+      if (localId != null) 'localId': localId,
+
+      // Core
+      'name': name,
+      'surname': surname,
+      'phone': phone,
+      'email': email,
+      'address': address,
+      'dob': dob,
+      'gender': gender,
+
+      // Extras
+      'customEntries': customEntries,
+      if (others != null) 'others': others,
+      if (photo != null) 'photo': photo,
+
+      // Image persistence
+      if (outB64 != null) 'imageB64': outB64,
+    };
+  }
+
+  Customer copyWith({
+    String? name,
+    String? surname,
+    String? phone,
+    String? email,
+    String? address,
+    String? dob,
+    String? gender,
+    List<Map<String, String>>? customEntries,
+    String? others,
+    String? photo,
+    Uint8List? imageBytes,
+    String? imageB64,
+    String? id,
+    String? serverId,
+    int? fileId,
+    int? localId,
+  }) {
+    return Customer(
+      name: name ?? this.name,
+      surname: surname ?? this.surname,
+      phone: phone ?? this.phone,
+      email: email ?? this.email,
+      address: address ?? this.address,
+      dob: dob ?? this.dob,
+      gender: gender ?? this.gender,
+      customEntries: customEntries ?? this.customEntries,
+      others: others ?? this.others,
+      photo: photo ?? this.photo,
+      imageBytes: imageBytes ?? this.imageBytes,
+      imageB64: imageB64 ?? this.imageB64,
+      id: id ?? this.id,
+      serverId: serverId ?? this.serverId,
+      fileId: fileId ?? this.fileId,
+      localId: localId ?? this.localId,
     );
   }
 }

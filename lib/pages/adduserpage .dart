@@ -92,8 +92,15 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _dobController = TextEditingController();
+  final TextEditingController _registeredDobController = TextEditingController();
 
-  DateTime? _selectedDate;
+  // Marital Status + Marriage Date
+  final TextEditingController _marriageDateController = TextEditingController();
+  DateTime? _selectedMarriageDate;
+  String? _maritalStatus; // "Single", "Married", "others"
+
+  DateTime? _selectedDate; // DOB
+  DateTime? _selectedRegisteredDate; // Registered DOB (SDOB)
   String? _gender;
   List<Map<String, String>> _customEntries = [];
 
@@ -117,6 +124,8 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     _addressController.dispose();
     _emailController.dispose();
     _dobController.dispose();
+    _registeredDobController.dispose();
+    _marriageDateController.dispose();
     super.dispose();
   }
 
@@ -134,18 +143,19 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
   Future<void> _saveCustomEntries() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('custom_entries', json.encode(_customEntries));
-  }
+    }
 
   Future<void> _pickImage() async {
     final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) setState(() => _imageFile = File(pickedFile.path));
   }
 
+  // Pick DOB
   Future<void> _pickDate() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate ?? DateTime(2000),
+      initialDate: _selectedDate ?? now,
       firstDate: DateTime(1900),
       lastDate: now,
     );
@@ -153,6 +163,40 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       setState(() {
         _selectedDate = picked;
         _dobController.text = "${picked.day}/${picked.month}/${picked.year}";
+      });
+    }
+  }
+
+  // Pick Registered DOB (SDOB)
+  Future<void> _rpickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedRegisteredDate ?? now,
+      firstDate: DateTime(1900),
+      lastDate: now,
+    );
+    if (picked != null) {
+      setState(() {
+        _selectedRegisteredDate = picked;
+        _registeredDobController.text = "${picked.day}/${picked.month}/${picked.year}";
+      });
+    }
+  }
+
+  // Pick Marriage Date
+  Future<void> _pickMarriageDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedMarriageDate ?? now,
+      firstDate: DateTime(1900),
+      lastDate: now,
+    );
+    if (picked != null) {
+      setState(() {
+        _selectedMarriageDate = picked;
+        _marriageDateController.text = "${picked.day}/${picked.month}/${picked.year}";
       });
     }
   }
@@ -221,22 +265,60 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     return dt.toUtc().toIso8601String();
   }
 
+  // Registered DOB -> ISO8601 (UTC)
+  String? _registeredDobIso8601Z() {
+    if (_selectedRegisteredDate == null) return null;
+    final dt = DateTime(
+      _selectedRegisteredDate!.year,
+      _selectedRegisteredDate!.month,
+      _selectedRegisteredDate!.day,
+    );
+    return dt.toUtc().toIso8601String();
+  }
+
+  // Married Date -> ISO8601 (UTC)
+  String? _marriedDateIso8601Z() {
+    if (_selectedMarriageDate == null) return null;
+    final dt = DateTime(
+      _selectedMarriageDate!.year,
+      _selectedMarriageDate!.month,
+      _selectedMarriageDate!.day,
+    );
+    return dt.toUtc().toIso8601String();
+  }
+
+  // Build Others string (kept for display/local use)
   String _othersAsString() {
-    if (_customEntries.isEmpty) return "";
-    return _customEntries
-        .where(
-          (e) =>
-              (e['type']?.trim().isNotEmpty ?? false) ||
-              (e['detail']?.trim().isNotEmpty ?? false),
-        )
-        .map((e) {
-          final t = (e['type'] ?? '').trim();
-          final d = (e['detail'] ?? '').trim();
-          if (t.isNotEmpty && d.isNotEmpty) return "$t: $d";
-          return t.isNotEmpty ? t : d;
-        })
-        .where((s) => s.isNotEmpty)
-        .join(" | ");
+    final parts = <String>[];
+
+    final ms = _maritalStatus?.trim();
+    if (ms != null && ms.isNotEmpty) {
+      parts.add("Marital Status: $ms");
+      if (ms == 'Married') {
+        final md = _marriageDateController.text.trim();
+        if (md.isNotEmpty) parts.add("Marriage Date: $md");
+      }
+    }
+
+    if (_customEntries.isNotEmpty) {
+      final custom = _customEntries
+          .where(
+            (e) =>
+                (e['type']?.trim().isNotEmpty ?? false) ||
+                (e['detail']?.trim().isNotEmpty ?? false),
+          )
+          .map((e) {
+            final t = (e['type'] ?? '').trim();
+            final d = (e['detail'] ?? '').trim();
+            if (t.isNotEmpty && d.isNotEmpty) return "$t: $d";
+            return t.isNotEmpty ? t : d;
+          })
+          .where((s) => s.isNotEmpty)
+          .toList();
+      parts.addAll(custom);
+    }
+
+    return parts.join(" | ");
   }
 
   // Convert to PNG
@@ -283,7 +365,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       final baseName = dot > 0 ? fileNameOnly.substring(0, dot) : fileNameOnly;
 
       return {
-        "IsModified": false,
+        "IsModified": true,
         "FileData": b64,
         "FileName": "$baseName.png",
         "FileType": "image/png",
@@ -359,7 +441,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     if (curr < value) await prefs.setInt(key, value);
   }
 
-  // ---- POST call with ParentCustomerDataId support ----
+  // ---- POST call with payload matching your schema ----
   Future<Map<String, dynamic>> _createCustomerOnServerExactPayload({
     required String name,
     required String surname,
@@ -369,10 +451,17 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
     required String gender,
     required String others,
     required String? dobIsoZ,
+    required String? sDobIsoZ, // Registered DOB
     required int id,
-    int? parentCustomerDataId, // NEW
+    int? parentCustomerDataId,
     int? fileId,
     Map<String, dynamic>? httpFileData,
+
+    // NEW: fields to match server schema
+    required String? martialStatus,   // "Single" | "Married" | "others"
+    required String? marriedDateIsoZ, // ISO8601Z when married
+    List<Map<String, dynamic>>? childDatas,
+    List<Map<String, dynamic>>? documents,
   }) async {
     final token = await TokenStorage.getToken();
     final hasImage =
@@ -381,38 +470,42 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
     final httpFilePayload = hasImage
         ? {
-            if (fileId != null) "Id": fileId,
-            if (fileId != null) "FileId": fileId,
+            "Id": fileId ?? 0,
             "IsModified": true,
             "FileData": httpFileData["FileData"] ?? "",
-            "FileName": (httpFileData["FileName"] ?? "Profile_Image.png")
-                .toString(),
+            "FileName": (httpFileData["FileName"] ?? "Profile_Image.png").toString(),
             "FileType": (httpFileData["FileType"] ?? "image/png").toString(),
             "Remarks": (httpFileData["Remarks"] ?? "").toString(),
             "IsDeleted": false,
+            "CustomerDataId": id,
           }
         : null;
 
+    final nowUtcIso = DateTime.now().toUtc().toIso8601String();
+
     final payload = <String, dynamic>{
       "Id": id,
-      "ParentCustomerDataId":
-          parentCustomerDataId, // null => parent; non-null => child
+      "ParentCustomerDataId": parentCustomerDataId ?? 0,
       "Name": name,
       "Surname": surname,
       "PhoneNumber": phoneNumber,
-      "FileId": hasImage ? fileId : null,
+      "FileId": hasImage ? (fileId ?? 0) : 0,
       "EmailId": emailId,
       "Address": address,
       "Gender": gender.toLowerCase(),
       "Others": others,
-      "DOB": dobIsoZ ?? DateTime.now().toUtc().toIso8601String(),
-      "SDOB": dobIsoZ ?? DateTime.now().toUtc().toIso8601String(),
+      "DOB": dobIsoZ ?? nowUtcIso,
+      "SDOB": sDobIsoZ ?? dobIsoZ ?? nowUtcIso,
+      "MartialStatus": martialStatus ?? "",
+      "MarriedDate": (martialStatus != null && martialStatus.toLowerCase() == 'married')
+          ? (marriedDateIsoZ ?? nowUtcIso)
+          : null,
       "HttpFileData": httpFilePayload,
+      "ChildDatas": childDatas ?? <Map<String, dynamic>>[],
+      "Documents": documents ?? <Map<String, dynamic>>[],
     };
 
-    debugPrint(
-      '[Add] Using customerId=$id, parentId=$parentCustomerDataId, fileId=${hasImage ? fileId : null}',
-    );
+    debugPrint('[Add] Using customerId=$id, parentId=${parentCustomerDataId ?? 0}, fileId=${hasImage ? fileId : 0}');
 
     final headers = <String, String>{
       "Content-Type": "application/json; charset=utf-8",
@@ -422,26 +515,24 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
     final url = '$_apiBaseNormalized/CustomerDataM/AddAsync';
     try {
+      // Safe-logging without exposing base64
       final safePayload = Map<String, dynamic>.from(payload);
       if (safePayload['HttpFileData'] is Map) {
-        final fd = Map<String, dynamic>.from(
-          safePayload['HttpFileData'] as Map,
-        );
+        final fd = Map<String, dynamic>.from(safePayload['HttpFileData'] as Map);
         final b64 = (fd['FileData'] as String?);
-        fd['FileData'] = b64 == null
-            ? ""
-            : "<base64:${(b64.length / 1024).toStringAsFixed(1)}KB>";
+        fd['FileData'] = b64 == null ? "" : "<base64:${(b64.length / 1024).toStringAsFixed(1)}KB>";
         safePayload['HttpFileData'] = fd;
       }
       debugPrint('[Add] POST $url');
       debugPrint('[Add] Payload (safe): ${jsonEncode(safePayload)}');
-      
+      debugPrint('[Add] Headers: ${jsonEncode(headers)}');
 
       final res = await http.post(
         Uri.parse(url),
         headers: headers,
         body: jsonEncode(payload),
       );
+
       debugPrint('[Add] <- ${res.statusCode}');
       if (res.statusCode >= 200 && res.statusCode < 300) {
         if (res.body.trim().isEmpty) return {};
@@ -454,15 +545,13 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         }
         return {};
       }
-      final msg =
-          _extractServerError(res.body) ?? 'Server error ${res.statusCode}';
+      final msg = _extractServerError(res.body) ?? 'Server error ${res.statusCode}';
       throw Exception(msg);
     } catch (e) {
       debugPrint('[Add] POST failed: $e');
       rethrow;
     }
   }
-
 
   // Local-only id for cache (not for images)
   Future<int> _peekNextLocalCustomerId() async {
@@ -540,15 +629,19 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
 
   Future<void> _submit() async {
     if (_nameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Name is required")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Name is required")));
       return;
     }
     if (_phoneController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Phone No is required")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Phone No is required")));
+      return;
+    }
+    // If Married, require Marriage Date
+    if ((_maritalStatus ?? '').toLowerCase() == 'married' &&
+        _marriageDateController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select marriage date.")),
+      );
       return;
     }
 
@@ -563,9 +656,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              "This mobile number already exists locally. Please use a different number.",
-            ),
+            content: Text("This mobile number already exists locally. Please use a different number."),
           ),
         );
         return;
@@ -576,15 +667,15 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       final generatedCustomerId = await _takeNextCustomerId();
 
       final httpFileData = await _buildHttpFileData();
-      final hasImage =
-          httpFileData != null &&
-          (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
+      final hasImage = httpFileData != null && (((httpFileData['FileData'] as String?) ?? '').isNotEmpty);
       final generatedFileId = hasImage ? await _takeNextFileId() : null;
 
       final dobIsoZ = _dobIso8601Z();
+      final sDobIsoZ = _registeredDobIso8601Z();
+      final marriedDateIsoZ = _marriedDateIso8601Z();
       final others = _othersAsString();
 
-      // Send to API with ParentCustomerDataId (null for parent; non-null for child)
+      // Send to API with exact schema
       final serverResponse = await _createCustomerOnServerExactPayload(
         id: generatedCustomerId,
         parentCustomerDataId: _parentServerId,
@@ -596,28 +687,27 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         gender: _gender?.trim() ?? "",
         others: others,
         dobIsoZ: dobIsoZ,
+        sDobIsoZ: sDobIsoZ,
         fileId: generatedFileId,
-        httpFileData: httpFileData != null
-            ? {...httpFileData, "FileType": "image/png"}
-            : null,
+        httpFileData: httpFileData != null ? {...httpFileData, "FileType": "image/png"} : null,
+
+        // NEW fields
+        martialStatus: _maritalStatus,
+        marriedDateIsoZ: (_maritalStatus?.toLowerCase() == 'married') ? marriedDateIsoZ : null,
+        documents: const [], // attach documents here if you have any
+        childDatas: const [], // attach children here if you are sending nested
       );
 
       final created = _unwrapApiPayload(serverResponse);
       final serverId =
-          _toInt(
-            created['Id'] ??
-                created['CustomerDataMId'] ??
-                created['CustomerId'] ??
-                created['CustomerDataId'],
-          ) ??
+          _toInt(created['Id'] ?? created['CustomerDataMId'] ?? created['CustomerId'] ?? created['CustomerDataId']) ??
           generatedCustomerId;
 
       final fileId =
           _toInt(
             created['FileId'] ??
                 (created['HttpFileData'] is Map
-                    ? (created['HttpFileData']['Id'] ??
-                          created['HttpFileData']['FileId'])
+                    ? (created['HttpFileData']['Id'] ?? created['HttpFileData']['FileId'])
                     : null),
           ) ??
           (hasImage ? generatedFileId : null);
@@ -649,11 +739,14 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
         "address": _addressController.text.trim(),
         "email": _emailController.text.trim(),
         "dob": _dobController.text.trim(),
+        "registeredDob": _registeredDobController.text.trim(),
         "gender": (_gender ?? "").toLowerCase(),
         "customEntries": _customEntries,
         "serverId": serverId,
         "fileId": fileId,
-        "parentServerId": _parentServerId, // NEW
+        "parentServerId": _parentServerId,
+        "maritalStatus": _maritalStatus,
+        "marriageDate": _marriageDateController.text.trim(),
       };
       list.add(newCustomerMap);
 
@@ -684,9 +777,7 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
       Navigator.pop<model.Customer>(context, customer);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Submit failed: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Submit failed: $e")));
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -793,13 +884,13 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                     ),
                     const SizedBox(height: 30),
                     TextField(
-                      controller: _nameController,
-                      decoration: _inputDecoration("Name"),
+                      controller: _surnameController,
+                      decoration: _inputDecoration("Surname"),
                     ),
                     const Divider(color: Colors.black12),
                     TextField(
-                      controller: _surnameController,
-                      decoration: _inputDecoration("Surname"),
+                      controller: _nameController,
+                      decoration: _inputDecoration("Name"),
                     ),
                     const Divider(color: Colors.black12),
                     TextField(
@@ -807,6 +898,18 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                       readOnly: true,
                       onTap: _pickDate,
                       decoration: _inputDecoration("Date of Birth").copyWith(
+                        suffixIcon: const Icon(
+                          Icons.keyboard_arrow_down,
+                          color: Colors.black54,
+                        ),
+                      ),
+                    ),
+                    const Divider(color: Colors.black12),
+                    TextField(
+                      controller: _registeredDobController,
+                      readOnly: true,
+                      onTap: _rpickDate,
+                      decoration: _inputDecoration("Registered Date of Birth").copyWith(
                         suffixIcon: const Icon(
                           Icons.keyboard_arrow_down,
                           color: Colors.black54,
@@ -839,15 +942,14 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                       ),
                     ),
                     Row(
-                      children: ["Male", "Female", "Other"].map((g) {
+                      children: ["Male", "Female", "TransGender"].map((g) {
                         return Expanded(
                           child: Row(
                             children: [
                               Radio<String>(
                                 value: g,
                                 groupValue: _gender,
-                                onChanged: (val) =>
-                                    setState(() => _gender = val),
+                                onChanged: (val) => setState(() => _gender = val),
                                 activeColor: Colors.black87,
                               ),
                               Text(g),
@@ -857,6 +959,56 @@ class _AddNewUserPageState extends State<AddNewUserPage> {
                       }).toList(),
                     ),
                     const Divider(color: Colors.black12),
+
+                    // Marital Status + conditional Marriage Date
+                    const SizedBox(height: 12),
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        "Marital Status",
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                    Row(
+                      children: ["Single", "Married", "others"].map((s) {
+                        return Expanded(
+                          child: Row(
+                            children: [
+                              Radio<String>(
+                                value: s,
+                                groupValue: _maritalStatus,
+                                onChanged: (val) {
+                                  setState(() {
+                                    _maritalStatus = val;
+                                    if (val != 'Married') {
+                                      _selectedMarriageDate = null;
+                                      _marriageDateController.clear();
+                                    }
+                                  });
+                                },
+                                activeColor: Colors.black87,
+                              ),
+                              Flexible(child: Text(s)),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    if (_maritalStatus == 'Married') ...[
+                      TextField(
+                        controller: _marriageDateController,
+                        readOnly: true,
+                        onTap: _pickMarriageDate,
+                        decoration: _inputDecoration("Marriage Date").copyWith(
+                          suffixIcon: const Icon(
+                            Icons.calendar_today,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const Divider(color: Colors.black12),
+
                     ElevatedButton.icon(
                       onPressed: _showAddCustomEntryDialog,
                       icon: Icon(Icons.add, color: kPrimaryBlue),

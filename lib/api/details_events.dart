@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/storage/Token_storage.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class CustomerApiService {
@@ -13,14 +13,10 @@ class CustomerApiService {
 
   CustomerApiService({http.Client? client}) : _client = client ?? http.Client();
 
-  // Safe token resolution (handles Future<String> or String)
   Future<String?> _resolveToken() async {
-    final dynamic v = TokenStorage.getToken();
-    if (v is Future) {
-      final dynamic r = await v;
-      return r is String ? r : r?.toString();
-    }
-    return v is String ? v : v?.toString();
+    final Object maybeFuture = TokenStorage.getToken();
+    if (maybeFuture is Future) return await maybeFuture as String?;
+    return maybeFuture as String?;
   }
 
   Uri _buildUri(String base, String path) {
@@ -55,6 +51,7 @@ class CustomerApiService {
   }
 
   bool _looksLikeUrl(String? s) => s != null && (s.startsWith('http://') || s.startsWith('https://'));
+
   String _rootBase(String base) => base.toLowerCase().endsWith('/api') ? base.substring(0, base.length - 4) : base;
 
   String? _fileNameToUrl(dynamic fileName) {
@@ -103,59 +100,16 @@ class CustomerApiService {
     return null;
   }
 
-  bool _isPositiveId(dynamic v) {
-    if (v == null) return false;
-    if (v is int) return v > 0;
-    final p = int.tryParse(v.toString());
-    return p != null && p > 0;
-  }
-
-  DateTime? _parseDate(dynamic v) {
-    if (v == null) return null;
-    if (v is DateTime) return v;
-    final s = v.toString().trim();
-    if (s.isEmpty) return null;
-
-    // .NET /Date(…)/ in ms
-    final m = RegExp(r'^/Date\((\d+)\)/$').firstMatch(s);
-    if (m != null) {
-      final ms = int.tryParse(m.group(1)!);
-      if (ms != null) return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
-    }
-
-    final iso = DateTime.tryParse(s);
-    if (iso != null) return iso;
-
-    final parts = s.split(RegExp(r'[-/.\s]'));
-    if (parts.length == 3) {
-      int? a = int.tryParse(parts[0]);
-      int? b = int.tryParse(parts[1]);
-      int? c = int.tryParse(parts[2]);
-      if (a != null && b != null && c != null) {
-        if (a > 12) {
-          return DateTime.tryParse('${c.toString().padLeft(4, '0')}-${b.toString().padLeft(2, '0')}-${a.toString().padLeft(2, '0')}');
-        } else if (b > 12) {
-          return DateTime.tryParse('${c.toString().padLeft(4, '0')}-${a.toString().padLeft(2, '0')}-${b.toString().padLeft(2, '0')}');
-        } else {
-          if (c > 1900) {
-            return DateTime.tryParse('${a.toString().padLeft(4, '0')}-${b.toString().padLeft(2, '0')}-${c.toString().padLeft(2, '0')}');
-          }
-        }
-      }
-    }
-    return null;
-  }
-
-  // GET customers (list)
+  // ---------------- Base: GET customers (kept intact) ----------------
   Future<List<model.Customer>> getCustomers() async {
     final token = await _resolveToken();
     if (token == null || token.isEmpty) throw Exception('Missing auth token');
 
-    final uri = _buildUri(baseUrl, '/api/CustomerDataM/GetAllAsync');
+    final uri = _buildUri(baseUrl, '/api/CustomerDataM/GetAsync');
     final headers = {'Accept': 'application/json', 'Authorization': 'Bearer $token'};
 
     _logRequest(method: 'GET', uri: uri, headers: headers);
-    final resp = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 30));
+    final resp = await _client.get(uri, headers: headers);
     _logResponse(resp);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw Exception('GET ${uri.path} failed: ${resp.statusCode} ${resp.body}');
@@ -168,13 +122,12 @@ class CustomerApiService {
 
     final customers = list.map((e) => _mapApiToCustomer(Map<String, dynamic>.from(e as Map))).toList();
 
-    // Deduplicate by phone; prefer the one with visual data
     final byPhone = <String, model.Customer>{};
     bool hasVisual(model.Customer c) =>
         (c.imageBytes != null && c.imageBytes!.isNotEmpty) ||
         ((c.imageB64 ?? '').isNotEmpty) ||
         _looksLikeUrl(c.others) ||
-        _isPositiveId(c.fileId);
+        (c.fileId != null && c.fileId.toString().trim().isNotEmpty);
 
     for (final c in customers) {
       final prev = byPhone[c.phone];
@@ -185,55 +138,6 @@ class CustomerApiService {
     return byPhone.values.toList();
   }
 
-  // GET one customer by id (tries a few likely endpoints)
-  Future<model.Customer?> getCustomerById(String id) async {
-    final token = await _resolveToken();
-    if (token == null || token.isEmpty) throw Exception('Missing auth token');
-    if (id.isEmpty) return null;
-
-    final headers = {'Accept': 'application/json', 'Authorization': 'Bearer $token'};
-    final candidates = <Uri>[
-      _buildUri(baseUrl, '/api/CustomerDataM/GetByIdAsync/$id'),
-      _buildUri(baseUrl, '/api/CustomerDataM/GetById/$id'),
-      _buildUri(baseUrl, '/api/CustomerDataM/GetAsync/$id'),
-      _buildUri(baseUrl, '/api/CustomerDataM/GetById?id=$id'),
-      _buildUri(baseUrl, '/api/CustomerDataM/Get/$id'),
-    ];
-
-    for (final uri in candidates) {
-      try {
-        _logRequest(method: 'GET', uri: uri, headers: headers);
-        final resp = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 20));
-        _logResponse(resp);
-        if (resp.statusCode >= 200 && resp.statusCode < 300) {
-          final decoded = json.decode(resp.body);
-          dynamic item;
-          if (decoded is Map) {
-            final inner = decoded['Response'] ?? decoded['response'] ?? decoded;
-            if (inner is Map) {
-              item = inner;
-            } else if (inner is List && inner.isNotEmpty) {
-              item = inner.first;
-            } else {
-              item = decoded;
-            }
-          } else if (decoded is List && decoded.isNotEmpty) {
-            item = decoded.first;
-          }
-          if (item is Map) {
-            return _mapApiToCustomer(Map<String, dynamic>.from(item));
-          }
-        } else if (resp.statusCode == 404) {
-          continue;
-        }
-      } catch (e) {
-        debugPrint('[API] getCustomerById($id) via $uri failed: $e');
-      }
-    }
-    return null;
-  }
-
-  // Map API row -> Customer model, including DOB and children
   model.Customer _mapApiToCustomer(Map<String, dynamic> m) {
     final id = (_readNumericId(m) ?? (m['Id'] ?? m['id'] ?? '')).toString();
 
@@ -275,7 +179,6 @@ class CustomerApiService {
       }
     }
 
-    // Fallback: data URL in Others
     if (bytes == null && othersApi.startsWith('data:image')) {
       final decoded = _decodeB64Image(othersApi);
       if (decoded != null && decoded.isNotEmpty) {
@@ -287,65 +190,6 @@ class CustomerApiService {
     final othersForModel = (urlFromFileName != null && urlFromFileName.isNotEmpty)
         ? urlFromFileName
         : othersApi;
-
-    // Extract DOB/birthday
-    final dobRaw =
-        m['DOB'] ??
-        m['Dob'] ??
-        m['dob'] ??
-        m['DateOfBirth'] ??
-        m['dateOfBirth'] ??
-        m['BirthDate'] ??
-        m['birthDate'] ??
-        m['Birthday'] ??
-        m['birthday'];
-
-    final dob = _parseDate(dobRaw);
-    final dobIso = dob?.toIso8601String();
-
-    // Extract Child/Children-like fields
-    dynamic rawChildren =
-        m['Children'] ?? m['children'] ?? m['ChildrenNames'] ?? m['childrenNames'] ??
-        m['Kids'] ?? m['kids'] ?? m['Dependents'] ?? m['dependents'];
-    dynamic rawChildName =
-        m['ChildName'] ?? m['childName'] ?? m['Child'] ?? m['child'];
-
-    List<String> _normalizeChildren(dynamic a, dynamic b) {
-      final out = <String>[];
-      void add(dynamic v) {
-        if (v == null) return;
-        if (v is List) {
-          for (final e in v) {
-            final s = e?.toString().trim();
-            if (s != null && s.isNotEmpty) out.add(s);
-          }
-        } else if (v is String) {
-          final s = v.trim();
-          if (s.isEmpty) return;
-          if ((s.startsWith('[') && s.endsWith(']')) ||
-              (s.startsWith('"') && s.endsWith('"'))) {
-            try {
-              final decoded = json.decode(s);
-              add(decoded);
-              return;
-            } catch (_) {}
-          }
-          s.split(RegExp(r'[;,|]'))
-              .map((x) => x.trim())
-              .where((x) => x.isNotEmpty)
-              .forEach(out.add);
-        } else {
-          final s = v.toString().trim();
-          if (s.isNotEmpty) out.add(s);
-        }
-      }
-      add(rawChildren);
-      add(rawChildName);
-      final seen = <String>{};
-      return out.where((e) => seen.add(e)).toList();
-    }
-
-    final childrenList = _normalizeChildren(rawChildren, rawChildName);
 
     return model.Customer.fromMap(<String, dynamic>{
       'id': id,
@@ -360,30 +204,19 @@ class CustomerApiService {
       'others': othersForModel,
       'imageBytes': bytes,
       'imageB64': b64ForModel,
-      if (dobIso != null) 'dob': dobIso,
-      if (childrenList.isNotEmpty) 'children': childrenList,
-      if (childrenList.length == 1) 'childName': childrenList.first,
     });
   }
 
-  // Fetch real bytes by FileId if GET omitted/placeholder FileData
   Future<Uint8List?> fetchFileBytesById(dynamic fileId) async {
     final token = await _resolveToken();
     if (token == null || token.isEmpty) throw Exception('Missing auth token');
-
-    int? fidNum;
-    if (fileId is int) {
-      fidNum = fileId;
-    } else {
-      fidNum = int.tryParse(fileId?.toString() ?? '');
-    }
-    if (fidNum == null || fidNum <= 0) return null;
-    final fid = fidNum.toString();
+    if (fileId == null) return null;
+    final fid = fileId.toString().trim();
+    if (fid.isEmpty) return null;
 
     final headersJson = {'Accept': 'application/json', 'Authorization': 'Bearer $token'};
     final headersBinary = {'Accept': '*/*', 'Authorization': 'Bearer $token'};
 
-    // Removed '/api/Files/$fid'
     final candidates = <Uri>[
       _buildUri(baseUrl, '/api/CustomerDataM/GetFile/$fid'),
       _buildUri(baseUrl, '/api/CustomerDataM/GetFile?id=$fid'),
@@ -391,6 +224,7 @@ class CustomerApiService {
       _buildUri(baseUrl, '/api/CustomerDataM/DownloadFile?id=$fid'),
       _buildUri(baseUrl, '/api/File/Download/$fid'),
       _buildUri(baseUrl, '/api/File/Get/$fid'),
+      _buildUri(baseUrl, '/api/Files/$fid'),
     ];
 
     for (int i = 0; i < candidates.length; i++) {
@@ -399,19 +233,13 @@ class CustomerApiService {
       final headers = isJsonAttempt ? headersJson : headersBinary;
 
       _logRequest(method: 'GET', uri: uri, headers: headers);
-      http.Response resp;
-      try {
-        resp = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 20));
-      } catch (e) {
-        debugPrint('[API] GET $uri threw: $e');
-        continue;
-      }
+      final resp = await _client.get(uri, headers: headers);
       _logResponse(resp);
 
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
         final ctype = (resp.headers['content-type'] ?? '').toLowerCase();
 
-        if (ctype.contains('application/json') || ctype.contains('text/json')) {
+        if (ctype.contains('application/json')) {
           try {
             final decoded = json.decode(resp.body);
             dynamic fileData;
@@ -437,7 +265,6 @@ class CustomerApiService {
       } else if (resp.statusCode == 404 || resp.statusCode == 405) {
         continue;
       } else {
-        debugPrint('[API] GET $uri -> ${resp.statusCode} ${resp.reasonPhrase}');
         continue;
       }
     }
@@ -445,7 +272,140 @@ class CustomerApiService {
   }
 
   Future<model.Customer?> getCustomerByPhone(String s) async {
-    // If you have such an endpoint, wire it similarly to getCustomerById
     return null;
   }
+
+  Future<model.Customer?> getCustomerById(String s) async {
+    return null;
+  }
+
+  // ---------------- Dates parsing and list with events ----------------
+
+  DateTime _toDateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+  DateTime? _parseDateAny(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return _toDateOnly(v);
+    if (v is int) {
+      final ms = v > 20000000000 ? v : v * 1000; // heuristic seconds->ms
+      return _toDateOnly(DateTime.fromMillisecondsSinceEpoch(ms));
+    }
+    final s = v.toString().trim();
+    if (s.isEmpty) return null;
+
+    final dotNetMatch = RegExp(r'/Date\((\d+)\)/').firstMatch(s);
+    if (dotNetMatch != null) {
+      final ms = int.tryParse(dotNetMatch.group(1)!);
+      if (ms != null) return _toDateOnly(DateTime.fromMillisecondsSinceEpoch(ms));
+    }
+
+    final iso = DateTime.tryParse(s);
+    if (iso != null) return _toDateOnly(iso);
+
+    final m = RegExp(r'^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$').firstMatch(s);
+    if (m != null) {
+      int a = int.parse(m.group(1)!);
+      int b = int.parse(m.group(2)!);
+      int y = int.parse(m.group(3)!);
+      if (y < 100) y += 2000;
+      int day, month;
+      if (a > 12) { day = a; month = b; }
+      else if (b > 12) { day = b; month = a; }
+      else { day = a; month = b; }
+      try {
+        return _toDateOnly(DateTime(y, month, day));
+      } catch (_) { return null; }
+    }
+    return null;
+  }
+
+  static const _dobKeys = ['DOB','Dob','dob','DateOfBirth','BirthDate','Birthday'];
+  static const _annKeys = ['MarriageDate','Anniversary','AnniversaryDate','DateOfAnniversary','WeddingDate'];
+
+  DateTime? _readDateFromAny(Map<String, dynamic> m, List<String> keys) {
+    for (final k in keys) {
+      if (m.containsKey(k)) {
+        final dt = _parseDateAny(m[k]);
+        if (dt != null) return dt;
+      }
+    }
+    final others = (m['Others'] ?? '').toString();
+    for (final k in keys) {
+      final rx = RegExp('$k\\s*[:=]\\s*([^,;\\n]+)', caseSensitive: false);
+      final mm = rx.firstMatch(others);
+      if (mm != null) {
+        final dt = _parseDateAny(mm.group(1));
+        if (dt != null) return dt;
+      }
+    }
+    return null;
+  }
+
+  bool _hasVisual(model.Customer c) {
+    return (c.imageBytes != null && c.imageBytes!.isNotEmpty) ||
+        ((c.imageB64 ?? '').isNotEmpty) ||
+        _looksLikeUrl(c.others) ||
+        (c.fileId != null && c.fileId.toString().trim().isNotEmpty);
+  }
+
+  Future<List<CustomerWithEvents>> getCustomersWithEvents() async {
+    final token = await _resolveToken();
+    if (token == null || token.isEmpty) throw Exception('Missing auth token');
+
+    final uri = _buildUri(baseUrl, '/api/CustomerDataM/GetAsync');
+    final headers = {'Accept': 'application/json', 'Authorization': 'Bearer $token'};
+
+    _logRequest(method: 'GET', uri: uri, headers: headers);
+    final resp = await _client.get(uri, headers: headers);
+    _logResponse(resp);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw Exception('GET ${uri.path} failed: ${resp.statusCode} ${resp.body}');
+    }
+
+    final decoded = json.decode(resp.body);
+    final List<dynamic> list = decoded is Map && decoded['Response'] is List
+        ? decoded['Response'] as List
+        : (decoded is List ? decoded : const []);
+
+    final temp = <CustomerWithEvents>[];
+    for (final e in list) {
+      final row = Map<String, dynamic>.from(e as Map);
+      final customer = _mapApiToCustomer(row);
+      final dob = _readDateFromAny(row, _dobKeys);
+      final ann = _readDateFromAny(row, _annKeys);
+      temp.add(CustomerWithEvents(customer: customer, dob: dob, anniversary: ann));
+    }
+
+    final byPhone = <String, CustomerWithEvents>{};
+    for (final cwe in temp) {
+      final phone = cwe.customer.phone;
+      final prev = byPhone[phone];
+      if (prev == null) {
+        byPhone[phone] = cwe;
+      } else {
+        final prevHasVisual = _hasVisual(prev.customer);
+        final currHasVisual = _hasVisual(cwe.customer);
+        final currBetterVisual = (!prevHasVisual && currHasVisual);
+        final currAddsDates = (prev.dob == null && cwe.dob != null) ||
+                              (prev.anniversary == null && cwe.anniversary != null);
+        if (currBetterVisual || currAddsDates) {
+          byPhone[phone] = cwe;
+        }
+      }
+    }
+    return byPhone.values.toList();
+  }
+}
+
+// Wrapper for customer + events
+class CustomerWithEvents {
+  final model.Customer customer;
+  final DateTime? dob;
+  final DateTime? anniversary;
+
+  const CustomerWithEvents({
+    required this.customer,
+    required this.dob,
+    required this.anniversary,
+  });
 }

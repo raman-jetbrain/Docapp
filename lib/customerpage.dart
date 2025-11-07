@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:docapp/pages/adduserpage%20.dart';
 import 'package:docapp/api/customer_api_service.dart';
+import 'package:docapp/birthdaylist.dart';
+import 'package:docapp/pages/adduserpage%20.dart';
 import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/dashboardpage.dart' hide CustomerApiService;
 import 'package:docapp/dateventspage.dart';
@@ -85,21 +86,22 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
       // Background: fetch bytes via FileId if GET did not include real FileData
       Future.microtask(() async {
-        final need = customers.where((c) {
-          final hasBytes = c.imageBytes != null && c.imageBytes!.isNotEmpty;
-          final hasUrl = (c.others ?? '').startsWith('http');
-          final fid = c.fileId?.toString().trim();
-          return !hasBytes && !hasUrl && (fid != null && fid.isNotEmpty);
-        }).toList();
-        if (need.isEmpty) return;
+        try {
+          final need = customers.where((c) {
+            final hasBytes = c.imageBytes != null && c.imageBytes!.isNotEmpty;
+            final hasUrl = (c.others ?? '').startsWith('http');
+            final fid = c.fileId is int
+                ? c.fileId as int
+                : int.tryParse(c.fileId?.toString() ?? '');
+            return !hasBytes && !hasUrl && fid != null && fid > 0;
+          }).toList();
 
-        final updated = List<model.Customer>.from(customers);
-        const int kParallel = 3;
-        final queue = List<model.Customer>.from(need);
+          if (need.isEmpty) return;
 
-        Future<void> worker() async {
-          while (queue.isNotEmpty) {
-            final c = queue.removeAt(0);
+          final updated = List<model.Customer>.from(customers);
+
+          // Sequential (simple, safe)
+          for (final c in need) {
             try {
               final bytes = await _api.fetchFileBytesById(c.fileId);
               if (bytes != null && bytes.isNotEmpty) {
@@ -111,31 +113,32 @@ class _CustomerScreenState extends State<CustomerScreen> {
                   updated[idx] = model.Customer.fromMap(m);
                 }
               }
-            } catch (e) {
-              debugPrint('[UI] fileId fetch failed for ${c.fileId}: $e');
+            } catch (e, st) {
+              debugPrint('[UI] fileId fetch failed for ${c.fileId}: $e\n$st');
             }
           }
-        }
 
-        await Future.wait(List.generate(kParallel, (_) => worker()));
-        if (!mounted) return;
+          if (!mounted) return;
 
-        final anyImproved = updated.any(
-          (c) => c.imageBytes != null && c.imageBytes!.isNotEmpty,
-        );
-        if (anyImproved) {
-          setState(() {
-            customers
-              ..clear()
-              ..addAll(updated);
-            if (lastCustomer != null) {
-              final idx = customers.indexWhere(
-                (x) => x.phone == lastCustomer!.phone,
-              );
-              if (idx != -1) lastCustomer = customers[idx];
-            }
-            _filterCustomers();
-          });
+          final anyImproved = updated.any(
+            (c) => c.imageBytes != null && c.imageBytes!.isNotEmpty,
+          );
+          if (anyImproved) {
+            setState(() {
+              customers
+                ..clear()
+                ..addAll(updated);
+              if (lastCustomer != null) {
+                final idx = customers.indexWhere(
+                  (x) => x.phone == lastCustomer!.phone,
+                );
+                if (idx != -1) lastCustomer = customers[idx];
+              }
+              _filterCustomers();
+            });
+          }
+        } catch (e, st) {
+          debugPrint('[UI] background image hydration failed: $e\n$st');
         }
       });
     } catch (e) {
@@ -153,15 +156,103 @@ class _CustomerScreenState extends State<CustomerScreen> {
   }
 
   void _filterCustomers() {
-    final query = _searchController.text.toLowerCase();
-    setState(() {
-      filteredCustomers = customers.where((customer) {
-        final nameMatch = customer.name.toLowerCase().contains(query);
-        final surnameMatch = customer.surname.toLowerCase().contains(query);
-        final phoneMatch = customer.phone.toLowerCase().contains(query);
-        return nameMatch || surnameMatch || phoneMatch;
-      }).toList();
-    });
+    final q = _searchController.text.trim().toLowerCase();
+
+    if (q.isEmpty) {
+      setState(() => filteredCustomers = List.of(customers));
+      return;
+    }
+
+    final looksNumeric = RegExp(r'^[\d\s+\-()]+$').hasMatch(q);
+
+    bool matchesRelatives(model.Customer c, String q) {
+      try {
+        final m = c.toMap();
+        const relativeKeys = <String>[
+          'parentName',
+          'fatherName',
+          'motherName',
+          'guardianName',
+          'spouseName',
+          'husbandName',
+          'wifeName',
+          'childName',
+          'child',
+          'children',
+          'childrenNames',
+          'kids',
+          'dependents',
+          'dob',
+          'DOB',
+          'dateOfBirth',
+          'DateOfBirth',
+          'birthDate',
+          'BirthDate',
+          'birthday',
+          'Birthday',
+        ];
+
+        for (final key in relativeKeys) {
+          if (!m.containsKey(key) || m[key] == null) continue;
+          final v = m[key];
+
+          if (v is String) {
+            if (v.toLowerCase().contains(q)) return true;
+          } else if (v is List) {
+            for (final e in v) {
+              if (e == null) continue;
+              if (e.toString().toLowerCase().contains(q)) return true;
+            }
+          } else {
+            if (v.toString().toLowerCase().contains(q)) return true;
+          }
+        }
+      } catch (_) {}
+      return false;
+    }
+
+    final List<model.Customer> directMatches = customers.where((c) {
+      final name = c.name.toLowerCase();
+      final surname = c.surname.toLowerCase();
+      final phone = c.phone.toLowerCase();
+
+      final byNameOrSurname = name.contains(q) || surname.contains(q);
+      final byRelatives = matchesRelatives(c, q);
+      final byPhone = phone.contains(q);
+
+      return byNameOrSurname || byRelatives || byPhone;
+    }).toList();
+
+    final Set<String> surnamesToInclude = {
+      ...directMatches.map((c) => c.surname.toLowerCase()),
+      ...customers
+          .where((c) => c.surname.toLowerCase().contains(q))
+          .map((c) => c.surname.toLowerCase()),
+    };
+
+    List<model.Customer> result;
+    if (!looksNumeric && surnamesToInclude.isNotEmpty) {
+      final family = customers.where(
+        (c) => surnamesToInclude.contains(c.surname.toLowerCase()),
+      );
+
+      final seen = <String>{};
+      final combined = <model.Customer>[];
+
+      void add(model.Customer c) {
+        final key = c.phone;
+        if (seen.add(key)) combined.add(c);
+      }
+
+      for (final c in directMatches) add(c);
+      for (final c in family) add(c);
+
+      result = combined;
+    } else {
+      result = directMatches;
+    }
+
+    setState(() => filteredCustomers = result);
   }
 
   Future<void> _navigateToAddUserPage() async {
@@ -204,7 +295,39 @@ class _CustomerScreenState extends State<CustomerScreen> {
   void _navigateToEvents() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const CalendarApp()),
+      MaterialPageRoute(builder: (_) => const BirthdayPage()),
+    );
+  }
+
+  Future<void> _openCustomerDetail(model.Customer baseCustomer) async {
+    // Try to fetch full details by id before navigating
+    final baseMap = baseCustomer.toMap();
+    final id = (baseMap['serverId'] ?? baseMap['id'] ?? '').toString();
+    model.Customer detailed = baseCustomer;
+
+    if (id.isNotEmpty) {
+      // small loading dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+      try {
+        final fetched = await _api.getCustomerById(id);
+        if (fetched != null) detailed = fetched;
+      } catch (e) {
+        debugPrint('[UI] getCustomerById($id) failed: $e');
+      } finally {
+        if (mounted) Navigator.of(context).pop(); // close dialog
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerDetailPage(customer: detailed),
+      ),
     );
   }
 
@@ -295,7 +418,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
                       controller: _searchController,
                       decoration: const InputDecoration(
                         prefixIcon: Icon(Icons.search, color: Colors.grey),
-                        hintText: "Search by name, surname or phone",
+                        hintText: "Search by name, surname, phone or birthday",
                         border: InputBorder.none,
                         contentPadding: EdgeInsets.symmetric(
                           horizontal: 20,
@@ -355,16 +478,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
                             if (lastCustomer != null)
                               CustomerCard(
                                 customer: lastCustomer!,
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => CustomerDetailPage(
-                                        customer: lastCustomer!,
-                                      ),
-                                    ),
-                                  );
-                                },
+                                onTap: () => _openCustomerDetail(lastCustomer!),
                                 onDocumentsTap: () {
                                   Navigator.push(
                                     context,
@@ -393,15 +507,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
                             }
                             return CustomerCard(
                               customer: customer,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        CustomerDetailPage(customer: customer),
-                                  ),
-                                );
-                              },
+                              onTap: () => _openCustomerDetail(customer),
                               onDocumentsTap: () {
                                 Navigator.push(
                                   context,
@@ -463,7 +569,6 @@ class _CustomerScreenState extends State<CustomerScreen> {
               false,
               _navigateToEvents,
             ),
-            _buildNavBarItem(Icons.menu, 'Menu', false, () {}),
           ],
         ),
       ),
@@ -505,7 +610,6 @@ class _CustomerScreenState extends State<CustomerScreen> {
   }
 }
 
-
 class CustomerCard extends StatelessWidget {
   final model.Customer customer;
   final VoidCallback? onTap;
@@ -538,25 +642,173 @@ class CustomerCard extends StatelessWidget {
     }
   }
 
+  // Parse various date formats into DateTime
+  DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    final s = v.toString().trim();
+    if (s.isEmpty) return null;
+
+    // .NET /Date(…)/ ticks (ms)
+    final m = RegExp(r'^/Date\((\d+)\)/$').firstMatch(s);
+    if (m != null) {
+      final ms = int.tryParse(m.group(1)!);
+      if (ms != null) return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+    }
+
+    // ISO or general parseable format
+    final iso = DateTime.tryParse(s);
+    if (iso != null) return iso.toLocal();
+
+    // dd/MM/yyyy or MM/dd/yyyy or yyyy-MM-dd and common separators
+    final parts = s.split(RegExp(r'[-/.\s]'));
+    if (parts.length == 3) {
+      int? a = int.tryParse(parts[0]);
+      int? b = int.tryParse(parts[1]);
+      int? c = int.tryParse(parts[2]);
+      if (a != null && b != null && c != null) {
+        // Guess: if first > 12 => dd/MM/yyyy else if second > 12 => MM/dd/yyyy
+        if (a > 12) {
+          return DateTime.tryParse('${c.toString().padLeft(4, '0')}-${b.toString().padLeft(2, '0')}-${a.toString().padLeft(2, '0')}');
+        } else if (b > 12) {
+          return DateTime.tryParse('${c.toString().padLeft(4, '0')}-${a.toString().padLeft(2, '0')}-${b.toString().padLeft(2, '0')}');
+        } else {
+          // fallback: assume yyyy-MM-dd if c is 4-digit year
+          if (c > 1900) {
+            return DateTime.tryParse('${a.toString().padLeft(4, '0')}-${b.toString().padLeft(2, '0')}-${c.toString().padLeft(2, '0')}');
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  String _formatDate(DateTime d) {
+    const months = [
+      'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+    ];
+    return '${d.day.toString().padLeft(2, '0')} ${months[d.month - 1]} ${d.year}';
+  }
+
+  // Extract children/childName and DOB from the model’s map.
+  List<String> _extractChildren(model.Customer c) {
+    final out = <String>[];
+    Map<String, dynamic> m;
+    try {
+      m = c.toMap();
+    } catch (_) {
+      m = {};
+    }
+
+    dynamic rawChildren =
+        m['children'] ??
+        m['Children'] ??
+        m['childrenNames'] ??
+        m['ChildrenNames'] ??
+        m['kids'] ??
+        m['Kids'] ??
+        m['dependents'] ??
+        m['Dependents'];
+
+    dynamic rawSingle =
+        m['childName'] ??
+        m['ChildName'] ??
+        m['child'] ??
+        m['Child'];
+
+    void addFromDynamic(dynamic v) {
+      if (v == null) return;
+      if (v is List) {
+        for (final e in v) {
+          final s = e?.toString().trim();
+          if (s != null && s.isNotEmpty) out.add(s);
+        }
+      } else if (v is String) {
+        final s = v.trim();
+        if (s.isEmpty) return;
+        // Try JSON array text
+        if ((s.startsWith('[') && s.endsWith(']')) ||
+            (s.startsWith('"') && s.endsWith('"'))) {
+          try {
+            final decoded = json.decode(s);
+            addFromDynamic(decoded);
+            return;
+          } catch (_) {}
+        }
+        // Split by common delimiters
+        s.split(RegExp(r'[;,|]'))
+            .map((x) => x.trim())
+            .where((x) => x.isNotEmpty)
+            .forEach(out.add);
+      } else {
+        final s = v.toString().trim();
+        if (s.isNotEmpty) out.add(s);
+      }
+    }
+
+    addFromDynamic(rawChildren);
+    addFromDynamic(rawSingle);
+
+    final seen = <String>{};
+    return out.where((e) => seen.add(e)).toList();
+  }
+
+  String? _extractBirthdayText(model.Customer c) {
+    Map<String, dynamic> m;
+    try {
+      m = c.toMap();
+    } catch (_) {
+      m = {};
+    }
+
+    dynamic dobRaw =
+        m['dob'] ??
+        m['DOB'] ??
+        m['DateOfBirth'] ??
+        m['dateOfBirth'] ??
+        m['BirthDate'] ??
+        m['birthDate'] ??
+        m['Birthday'] ??
+        m['birthday'];
+
+    DateTime? dob;
+    if (dobRaw != null) {
+      dob = _parseDate(dobRaw);
+    }
+    // If API stored ISO in 'dob', parse it
+    if (dob == null && dobRaw is String) {
+      final tryIso = DateTime.tryParse(dobRaw);
+      if (tryIso != null) dob = tryIso.toLocal();
+    }
+    return dob != null ? _formatDate(dob) : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     ImageProvider? avatar;
 
-    // 1) Prefer bytes from GET HttpFileData.FileData
+    // 1) Prefer bytes from GET
     if (customer.imageBytes != null && customer.imageBytes!.isNotEmpty) {
       avatar = MemoryImage(customer.imageBytes!);
     }
 
-    // 2) Base64 string (data URL or stored base64)
+    // 2) Base64 string
     if (avatar == null && (customer.imageB64 ?? '').isNotEmpty) {
       final bytes = _safeDecodeB64(customer.imageB64);
       if (bytes != null && bytes.isNotEmpty) avatar = MemoryImage(bytes);
     }
 
-    // 3) URL from HttpFileData.FileName or Others
+    // 3) URL
     if (avatar == null && _looksLikeUrl(customer.others)) {
       avatar = NetworkImage(customer.others!);
     }
+
+    final children = _extractChildren(customer);
+    final hasChildren = children.isNotEmpty;
+    final childrenLabel = children.length > 1 ? 'Children' : 'Child';
+    final childrenText = children.join(', ');
+
+    final birthdayText = _extractBirthdayText(customer);
 
     return GestureDetector(
       onTap: onTap,
@@ -590,8 +842,9 @@ class CustomerCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Surname
                   Text(
-                    customer.name,
+                    customer.surname,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -599,31 +852,53 @@ class CustomerCard extends StatelessWidget {
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (customer.surname.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      customer.surname,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.black54,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                  const SizedBox(height: 4),
+                  // Name
+                  Text(
+                    customer.name,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.black54,
                     ),
-                  ],
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   const SizedBox(height: 6),
+                  // Phone
                   Text(
                     customer.phone,
                     style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
                     overflow: TextOverflow.ellipsis,
                   ),
+                  if (hasChildren) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.child_care, size: 18, color: Colors.orange),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '$childrenLabel: $childrenText',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade800,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
             ElevatedButton(
               onPressed: onDocumentsTap,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF38B6E4),
+                backgroundColor: const Color(0xFF38B6E4),
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),

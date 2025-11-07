@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/model/DocumentsItem.dart' show DocumentItem;
@@ -15,7 +14,6 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
-import 'package:photo_view/photo_view.dart';
 import 'package:share_plus/share_plus.dart';
 
 // ---------------- Limits ----------------
@@ -52,7 +50,7 @@ dynamic _sanitizeJsonAny(dynamic v) {
     if (m.containsKey('FileData')) {
       final fd = m['FileData'];
       final len = (fd is String) ? fd.length : (fd is List ? fd.length : 0);
-      m['FileData'] = '<omitted ${len} bytes>';
+      m['FileData'] = '<omitted $len bytes>';
     }
     m.updateAll((key, value) => _sanitizeJsonAny(value));
     return m;
@@ -489,7 +487,9 @@ class _DocumentsPageState extends State<DocumentsPage> {
       if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x38) return '.gif';
       if (data.length >= 12 &&
           data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
-          data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50) return '.webp';
+          data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50) {
+        return '.webp';
+      }
       if (data[0] == 0x50 && data[1] == 0x4B) return '.zip';
     }
     return '';
@@ -1139,7 +1139,7 @@ class _DocsAppBarTitle extends StatelessWidget {
       imgProvider = MemoryImage(customer.imageBytes!);
     }
 
-    final fullName = '${customer.name}'.trim();
+    final fullName = customer.name.trim();
 
     return Row(
       children: [

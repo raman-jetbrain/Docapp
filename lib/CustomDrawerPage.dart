@@ -1,34 +1,82 @@
 import 'package:docapp/dashboardpage.dart';
+import 'package:docapp/login/Loginpage.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+const String kTokenKey = 'auth_token';
 
-class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key});
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // Get device width (we’ll use only half)
-    final width = MediaQuery.of(context).size.width * 0.6; // This will make it 60% of the screen
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      initialRoute: '/login',
+      routes: {
+        '/login': (_) => const LoginView(),
+        '/dashboard': (_) => const Dashboardpage(),
+        // '/sales': (_) => const SalesPage(),
+        // '/orders': (_) => const OrdersPage(),
+        // '/payments': (_) => const PaymentsPage(),
+        // '/settings': (_) => const SettingsPage(),
+      },
+    );
+  }
+}
+// -------------------- Drawer --------------------
+class AppDrawer extends StatelessWidget {
+  const AppDrawer({super.key});
+
+  Future<void> _handleLogout(BuildContext context) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(kTokenKey);
+      await prefs.remove('refresh_token'); // if you use a refresh token
+    } catch (_) {}
+
+    if (Navigator.canPop(context)) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => LoginView()),
+        (route) => false,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width * 0.6;
 
     return SizedBox(
-      width: width, // only half of screen
+      width: width,
       child: Drawer(
         backgroundColor: Colors.white,
         child: SafeArea(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 🔹 Custom header with background image
+              // Header (gradient to avoid asset dependency)
               Container(
                 height: 200,
-                decoration: const BoxDecoration(
-                  image: DecorationImage(
-                    image: AssetImage("assets/images/Background2.jpeg"), // put your image
-                    fit: BoxFit.cover,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.blueGrey.shade900,
+                      Colors.blueGrey.shade600,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
                 ),
                 child: Container(
-                  color: Colors.black.withOpacity(0.3), // dark overlay for text clarity
+                  color: Colors.black.withOpacity(0.2),
                   child: const Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
@@ -38,7 +86,11 @@ class AppDrawer extends StatelessWidget {
                           CircleAvatar(
                             radius: 28,
                             backgroundColor: Colors.white,
-                            child: Icon(Icons.store, color: Colors.black, size: 30),
+                            child: Icon(
+                              Icons.store,
+                              color: Colors.black,
+                              size: 30,
+                            ),
                           ),
                           SizedBox(width: 12),
                           Column(
@@ -48,16 +100,17 @@ class AppDrawer extends StatelessWidget {
                               Text(
                                 "POS User",
                                 style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white),
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
                               ),
                               Text(
                                 "info@posapp.com",
                                 style: TextStyle(color: Colors.white70),
                               ),
                             ],
-                          )
+                          ),
                         ],
                       ),
                     ),
@@ -65,21 +118,20 @@ class AppDrawer extends StatelessWidget {
                 ),
               ),
 
-              // 🔹 Drawer items
+              // Drawer items
               ListTile(
                 leading: const Icon(Icons.dashboard),
                 title: const Text("Dashboard"),
                 onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) =>  Dashboardpage()),
-                  );
+                  Navigator.pop(context); // close drawer
+                  Navigator.pushReplacementNamed(context, '/dashboard');
                 },
               ),
               ListTile(
                 leading: const Icon(Icons.point_of_sale),
                 title: const Text("Sales"),
                 onTap: () {
+                  Navigator.pop(context);
                   Navigator.pushReplacementNamed(context, '/sales');
                 },
               ),
@@ -87,6 +139,7 @@ class AppDrawer extends StatelessWidget {
                 leading: const Icon(Icons.receipt_long),
                 title: const Text("Orders"),
                 onTap: () {
+                  Navigator.pop(context);
                   Navigator.pushReplacementNamed(context, '/orders');
                 },
               ),
@@ -94,6 +147,7 @@ class AppDrawer extends StatelessWidget {
                 leading: const Icon(Icons.payments),
                 title: const Text("Payments"),
                 onTap: () {
+                  Navigator.pop(context);
                   Navigator.pushReplacementNamed(context, '/payments');
                 },
               ),
@@ -101,6 +155,7 @@ class AppDrawer extends StatelessWidget {
                 leading: const Icon(Icons.add),
                 title: const Text("Add Item"),
                 onTap: () {
+                  Navigator.pop(context);
                   Navigator.pushReplacementNamed(context, '/sales');
                 },
               ),
@@ -111,15 +166,14 @@ class AppDrawer extends StatelessWidget {
                 leading: const Icon(Icons.settings),
                 title: const Text("Settings"),
                 onTap: () {
+                  Navigator.pop(context);
                   Navigator.pushReplacementNamed(context, '/settings');
                 },
               ),
               ListTile(
                 leading: const Icon(Icons.logout, color: Colors.red),
                 title: const Text("Logout"),
-                onTap: () {
-                  Navigator.pop(context); // just close drawer for now
-                },
+                onTap: () => _handleLogout(context),
               ),
 
               const Spacer(),
@@ -131,7 +185,7 @@ class AppDrawer extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey, fontSize: 12),
                 ),
-              )
+              ),
             ],
           ),
         ),
@@ -139,3 +193,5 @@ class AppDrawer extends StatelessWidget {
     );
   }
 }
+
+//

@@ -42,7 +42,6 @@ class _LoginViewState extends State<LoginView> {
     try {
       final baseUrl = ApiConstants.baseUrl;
       final url = Uri.parse("$baseUrl/api/Auth/LoginV2");
-
       final body = {"MobileNumber": phone, "IsUser": isUser};
 
       final res = await http.post(
@@ -54,9 +53,8 @@ class _LoginViewState extends State<LoginView> {
         body: jsonEncode(body),
       );
 
-      // Debug printing response
-      print("👉 Login response: ${res.statusCode}");
-      print("👉 Body: ${res.body}");
+      debugPrint("👉 Login response: ${res.statusCode}");
+      debugPrint("👉 Body: ${res.body}");
 
       if (!mounted) return;
 
@@ -68,16 +66,14 @@ class _LoginViewState extends State<LoginView> {
           debugPrint("⚠️ Failed to decode JSON: $e");
         }
 
-        // Save token if present
         final token = _extractToken(data);
         if (token != null && token.isNotEmpty) {
+          // Save the token (temporary or final; OTP page will overwrite if needed)
           await TokenStorage.saveToken(token);
         }
 
-        // ✅ Extract server Message (OTP message)
         final otpMessage = (data["Message"] ?? data["message"] ?? "").toString();
 
-        // ✅ Navigate with actual phone + OTP message
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -90,7 +86,6 @@ class _LoginViewState extends State<LoginView> {
         return;
       }
 
-      // Non-200 → try to show server message
       String serverMsg = '';
       try {
         final m = jsonDecode(res.body);
@@ -197,8 +192,7 @@ class _LoginViewState extends State<LoginView> {
                 ),
                 child: isLoading
                     ? const SizedBox(
-                        width: 20,
-                        height: 20,
+                        width: 20, height: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           valueColor: AlwaysStoppedAnimation(Colors.white),

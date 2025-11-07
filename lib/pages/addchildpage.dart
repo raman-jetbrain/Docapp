@@ -5,10 +5,12 @@ import 'dart:typed_data';
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/storage/Token_storage.dart';
+import 'package:file_picker/file_picker.dart'; // NEW: for picking documents
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p; // NEW: to inspect file extensions
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AddChildPage extends StatefulWidget {
@@ -35,18 +37,34 @@ class _AddChildPageState extends State<AddChildPage> {
   }
 
   final ImagePicker _picker = ImagePicker();
+
+  // Profile image
   File? _imageFile;
 
+  // Child core fields
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _surnameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _dobController = TextEditingController();
 
+  // DOB
+  final TextEditingController _dobController = TextEditingController();
   DateTime? _selectedDate;
-  String? _gender;
+
+  // Marital
+  final TextEditingController _marriageDateController = TextEditingController();
+  DateTime? _selectedMarriageDate;
+  String? _maritalStatus; // 'Single' | 'Married' | 'other'
+
+  // Gender
+  String? _gender; // 'Male' | 'Female' | 'Other'
+
+  // Custom entries -> Others
   List<Map<String, String>> _customEntries = [];
+
+  // Documents for this child (local, to send in payload)
+  final List<_LocalDoc> _childDocs = [];
 
   bool _submitting = false;
 
@@ -64,6 +82,7 @@ class _AddChildPageState extends State<AddChildPage> {
     _addressController.dispose();
     _emailController.dispose();
     _dobController.dispose();
+    _marriageDateController.dispose();
     super.dispose();
   }
 
@@ -114,11 +133,15 @@ class _AddChildPageState extends State<AddChildPage> {
         .join(" | ");
   }
 
-  // dd/MM/yyyy -> ISO8601 UTC with Z
+  // dd/MM/yyyy -> ISO8601 UTC with Z (noon to avoid tz shift)
+  String _isoUtcNoon(DateTime d) {
+    final localNoon = DateTime(d.year, d.month, d.day, 12);
+    return localNoon.toUtc().toIso8601String();
+  }
+
   String _dobIso8601Z() {
-    if (_selectedDate == null) return DateTime.now().toUtc().toIso8601String();
-    final d = DateTime(_selectedDate!.year, _selectedDate!.month, _selectedDate!.day);
-    return d.toUtc().toIso8601String();
+    final d = _selectedDate ?? DateTime.now();
+    return _isoUtcNoon(d);
   }
 
   Future<void> _pickImage() async {
@@ -146,16 +169,6 @@ class _AddChildPageState extends State<AddChildPage> {
     } catch (_) {
       return null;
     }
-  }
-
-  InputDecoration _inputDecoration(String placeholder, {IconData? icon}) {
-    return InputDecoration(
-      hintText: placeholder,
-      hintStyle: TextStyle(color: Colors.grey.shade600, fontSize: 16),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 14),
-      border: InputBorder.none,
-      prefixIcon: icon != null ? Icon(icon, color: Colors.black54, size: 20) : null,
-    );
   }
 
   String _digitsOnly(String s) => s.replaceAll(RegExp(r'\D'), '');
@@ -224,6 +237,7 @@ class _AddChildPageState extends State<AddChildPage> {
     return {};
   }
 
+  // Persist parent with returned children (and their documents if present)
   Future<void> _persistServerParentWithChildren(Map<String, dynamic> parentResp) async {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getString('customers');
@@ -240,10 +254,11 @@ class _AddChildPageState extends State<AddChildPage> {
           'phone': cm['PhoneNumber']?.toString() ?? '',
           'email': cm['EmailId']?.toString() ?? '',
           'address': cm['Address']?.toString() ?? '',
-          'dob': '',
+          'dob': cm['DOB']?.toString() ?? '', // if server echoes it back
           'gender': (cm['Gender']?.toString() ?? '').toLowerCase(),
           'serverId': cm['Id']?.toString(),
           'fileId': cm['FileId'],
+          'Documents': cm['Documents'] ?? [], // keep child's documents if present
           'customEntries': <Map<String, String>>[],
         });
       }
@@ -263,7 +278,7 @@ class _AddChildPageState extends State<AddChildPage> {
       'serverId': parentServerId,
       'ChildDatas': serverChildDatas, // exact server structure saved
       'Documents': parentResp['Documents'] ?? [],
-      'family': familyList, // offline UI mirror
+      'family': familyList, // offline UI mirror (with child docs now)
     };
 
     if (index != -1) {
@@ -290,6 +305,56 @@ class _AddChildPageState extends State<AddChildPage> {
     return null;
   }
 
+  // ---------- Documents picking ----------
+
+  Future<void> _pickDocuments() async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: true,
+      type: FileType.any,
+    );
+    if (result == null) return;
+
+    for (final f in result.files) {
+      try {
+        Uint8List? bytes = f.bytes;
+        if (bytes == null && f.path != null) {
+          bytes = await File(f.path!).readAsBytes();
+        }
+        if (bytes == null || bytes.isEmpty) continue;
+
+        final name = f.name.isNotEmpty ? f.name : (f.path != null ? p.basename(f.path!) : 'document.bin');
+        final mime = _inferMimeFromName(name);
+
+        setState(() {
+          _childDocs.add(_LocalDoc(bytes: bytes!, fileName: name, mimeType: mime, remarks: ''));
+        });
+      } catch (_) {}
+    }
+  }
+
+  String _inferMimeFromName(String name) {
+    final ext = p.extension(name).toLowerCase();
+    switch (ext) {
+      case '.png': return 'image/png';
+      case '.jpg':
+      case '.jpeg': return 'image/jpeg';
+      case '.gif': return 'image/gif';
+      case '.webp': return 'image/webp';
+      case '.bmp': return 'image/bmp';
+      case '.tif':
+      case '.tiff': return 'image/tiff';
+      case '.pdf': return 'application/pdf';
+      case '.csv': return 'text/csv';
+      case '.xls': return 'application/vnd.ms-excel';
+      case '.xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case '.doc': return 'application/msword';
+      case '.docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      case '.txt': return 'text/plain';
+      default: return 'application/octet-stream';
+    }
+  }
+
   // ---------- submit (child inside ChildDatas) ----------
 
   Future<void> _submit() async {
@@ -308,6 +373,10 @@ class _AddChildPageState extends State<AddChildPage> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Phone No is required")));
       return;
     }
+    if ((_maritalStatus ?? '').toLowerCase() == 'married' && _selectedMarriageDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select marriage date")));
+      return;
+    }
 
     FocusScope.of(context).unfocus();
     setState(() => _submitting = true);
@@ -322,6 +391,7 @@ class _AddChildPageState extends State<AddChildPage> {
         return;
       }
 
+      // Profile photo
       Uint8List? pngBytes;
       String fileName = "Profile_Image.png";
       if (_imageFile != null) {
@@ -338,6 +408,11 @@ class _AddChildPageState extends State<AddChildPage> {
       };
 
       final dobIso = _dobIso8601Z();
+      final marriedIso = (_maritalStatus?.toLowerCase() == 'married' && _selectedMarriageDate != null)
+          ? _isoUtcNoon(_selectedMarriageDate!)
+          : null;
+
+      // Profile file record for child (HttpFileData at child level)
       final httpFileData = (pngBytes != null)
           ? {
               "Id": 0,
@@ -351,9 +426,22 @@ class _AddChildPageState extends State<AddChildPage> {
             }
           : null;
 
+      // Child documents array
+      final docsPayload = _childDocs.map((d) => {
+        "Id": 0,
+        "IsModified": true,
+        "FileData": base64Encode(d.bytes),
+        "FileName": d.fileName,
+        "FileType": d.mimeType,
+        "Remarks": d.remarks,
+        "IsDeleted": false,
+        "CustomerDataId": 0,
+      }).toList();
+
+      // Child object with ALL details expected by API
       final childPayload = {
         "Id": 0,
-        "ParentCustomerDataId": parentId, // link to parent
+        "ParentCustomerDataId": parentId,
         "Name": _nameController.text.trim(),
         "Surname": _surnameController.text.trim(),
         "PhoneNumber": phoneRaw,
@@ -363,17 +451,20 @@ class _AddChildPageState extends State<AddChildPage> {
         "Gender": (_gender ?? "").toLowerCase(),
         "Others": _othersFromEntries(),
         "DOB": dobIso,
-        "SDOB": dobIso,
-        "HttpFileData": httpFileData,
-        "ChildDatas": [],
-        "Documents": [],
+        "SDOB": dobIso,                    // using same as DOB unless you want an extra field
+        "MartialStatus": _maritalStatus ?? "",
+        "MarriedDate": marriedIso,        // only if married
+        "HttpFileData": httpFileData,     // child's profile image
+        "ChildDatas": [],                 // no grand-children from this UI
+        "Documents": docsPayload,         // child's own documents
       };
 
+      // Parent wrapper for AddAsync (child inside ChildDatas[])
       final payload = <String, dynamic>{
         "Id": parentId,
         "ParentCustomerDataId": parentId,
         "ChildDatas": [childPayload],
-        "Documents": [],
+        "Documents": [], // parent-level docs (none here)
       };
 
       final url = '$_apiBaseNormalized/CustomerDataM/AddAsync';
@@ -386,8 +477,10 @@ class _AddChildPageState extends State<AddChildPage> {
       final decoded = res.body.trim().isEmpty ? {} : jsonDecode(res.body);
       final parentResp = _unwrapApiPayload(decoded);
 
+      // Persist updated parent (including child docs if echoed)
       await _persistServerParentWithChildren(parentResp);
 
+      // Return a local customer object representing the child
       final childMap = _pickNewChildFromResponse(parentResp, parentId) ?? {};
       final childCustomer = model.Customer(
         name: childMap['Name']?.toString() ?? _nameController.text.trim(),
@@ -508,6 +601,7 @@ class _AddChildPageState extends State<AddChildPage> {
                       ),
                     ),
 
+                    // Profile image
                     Center(
                       child: GestureDetector(
                         onTap: _pickImage,
@@ -525,6 +619,8 @@ class _AddChildPageState extends State<AddChildPage> {
                     const Divider(color: Colors.black12),
                     TextField(controller: _surnameController, decoration: _inputDecoration("Surname")),
                     const Divider(color: Colors.black12),
+
+                    // DOB
                     TextField(
                       controller: _dobController,
                       readOnly: true,
@@ -548,6 +644,7 @@ class _AddChildPageState extends State<AddChildPage> {
                       ),
                     ),
                     const Divider(color: Colors.black12),
+
                     TextField(controller: _emailController, decoration: _inputDecoration("Email")),
                     const Divider(color: Colors.black12),
                     TextField(
@@ -559,7 +656,8 @@ class _AddChildPageState extends State<AddChildPage> {
                     TextField(controller: _addressController, decoration: _inputDecoration("Address")),
                     const Divider(color: Colors.black12),
 
-                    const SizedBox(height: 20),
+                    // Gender
+                    const SizedBox(height: 16),
                     const Align(alignment: Alignment.centerLeft, child: Text("Gender", style: TextStyle(color: Colors.grey))),
                     Row(
                       children: ["Male", "Female", "Other"].map((g) {
@@ -579,7 +677,57 @@ class _AddChildPageState extends State<AddChildPage> {
                       }).toList(),
                     ),
 
+                    // Marital status and marriage date
+                    const SizedBox(height: 8),
+                    const Align(alignment: Alignment.centerLeft, child: Text("Marital Status", style: TextStyle(color: Colors.grey))),
+                    Wrap(
+                      spacing: 8,
+                      children: ['Single', 'Married', 'other'].map((s) {
+                        final selected = _maritalStatus == s;
+                        return ChoiceChip(
+                          label: Text(s),
+                          selected: selected,
+                          onSelected: (_) {
+                            setState(() {
+                              _maritalStatus = s;
+                              if (s != 'Married') {
+                                _selectedMarriageDate = null;
+                                _marriageDateController.clear();
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    if (_maritalStatus == 'Married') ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _marriageDateController,
+                        readOnly: true,
+                        onTap: () async {
+                          final now = DateTime.now();
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: _selectedMarriageDate ?? DateTime(now.year - 1),
+                            firstDate: DateTime(1900),
+                            lastDate: now,
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              _selectedMarriageDate = picked;
+                              _marriageDateController.text = "${picked.day}/${picked.month}/${picked.year}";
+                            });
+                          }
+                        },
+                        decoration: _inputDecoration("Marriage Date").copyWith(
+                          suffixIcon: const Icon(Icons.keyboard_arrow_down, color: Colors.black54),
+                        ),
+                      ),
+                    ],
+
                     const Divider(color: Colors.black12),
+
+                    // Custom entries -> Others
                     Align(
                       alignment: Alignment.centerLeft,
                       child: ElevatedButton.icon(
@@ -625,7 +773,6 @@ class _AddChildPageState extends State<AddChildPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-
                     if (_customEntries.isNotEmpty)
                       Align(
                         alignment: Alignment.centerLeft,
@@ -645,6 +792,100 @@ class _AddChildPageState extends State<AddChildPage> {
                           }).toList(),
                         ),
                       ),
+
+                    const SizedBox(height: 20),
+
+                    // Documents section
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.black12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.04),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            const Expanded(
+                              child: Text('Child Documents', style: TextStyle(fontWeight: FontWeight.w600)),
+                            ),
+                            TextButton.icon(
+                              onPressed: _pickDocuments,
+                              icon: const Icon(Icons.attach_file),
+                              label: const Text('Add'),
+                            ),
+                          ]),
+                          if (_childDocs.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 6),
+                              child: Text('No documents added yet', style: TextStyle(color: Colors.black54)),
+                            )
+                          else
+                            Column(
+                              children: _childDocs.map((d) {
+                                final icon = _iconForType(d.mimeType, d.fileName);
+                                return Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 6),
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.black12),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Container(
+                                        width: 44,
+                                        height: 44,
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade100,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Icon(icon, color: Colors.black54),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(d.fileName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                            const SizedBox(height: 6),
+                                            TextField(
+                                              decoration: const InputDecoration(
+                                                hintText: 'Remarks (optional)',
+                                                isDense: true,
+                                                border: OutlineInputBorder(),
+                                              ),
+                                              controller: d.remarksController,
+                                              onChanged: (v) => d.remarks = v,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.close, color: Colors.red),
+                                        onPressed: () {
+                                          setState(() => _childDocs.remove(d));
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -684,4 +925,48 @@ class _AddChildPageState extends State<AddChildPage> {
       ),
     );
   }
+
+  InputDecoration _inputDecoration(String placeholder, {IconData? icon}) {
+    return InputDecoration(
+      hintText: placeholder,
+      hintStyle: TextStyle(color: Colors.grey.shade600, fontSize: 16),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 14),
+      border: InputBorder.none,
+      prefixIcon: icon != null ? Icon(icon, color: Colors.black54, size: 20) : null,
+    );
+  }
+
+  IconData _iconForType(String mimeType, String name) {
+    final ext = p.extension(name).toLowerCase();
+    if (mimeType.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(ext)) {
+      return Icons.image_outlined;
+    }
+    if (mimeType.contains('pdf') || ext == '.pdf') return Icons.picture_as_pdf_outlined;
+    if (mimeType.contains('sheet') || mimeType.contains('excel') || ['.xls', '.xlsx', '.csv'].contains(ext)) {
+      return Icons.grid_on_outlined;
+    }
+    if (mimeType.contains('word') || ['.doc', '.docx', '.rtf'].contains(ext)) {
+      return Icons.description_outlined;
+    }
+    if (mimeType.contains('text') || ['.txt', '.log'].contains(ext)) {
+      return Icons.notes_outlined;
+    }
+    return Icons.insert_drive_file_outlined;
+  }
+}
+
+// Local in-memory document model for child
+class _LocalDoc {
+  final Uint8List bytes;
+  final String fileName;
+  final String mimeType;
+  String remarks;
+  final TextEditingController remarksController;
+
+  _LocalDoc({
+    required this.bytes,
+    required this.fileName,
+    required this.mimeType,
+    this.remarks = '',
+  }) : remarksController = TextEditingController(text: remarks);
 }
