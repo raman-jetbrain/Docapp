@@ -1,16 +1,17 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:docapp/anniversaryevent.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:docapp/api/customer_api_service.dart';
-import 'package:docapp/dashboardpage.dart' hide CustomerApiService;
+import 'package:docapp/dashboardpage.dart';
 import 'package:docapp/dateventspage.dart';
 import 'package:docapp/pages/adduserpage%20.dart';
-import 'package:docapp/pages/customerdetailpage.dart'; // optional if you want to jump to details anywhere
+import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/model/customer.dart' as model;
-import 'package:docapp/postereditpage.dart'; // contains PosterSharePage
+import 'package:docapp/postereditpage.dart';
 
 class BirthdayPage extends StatefulWidget {
   const BirthdayPage({super.key});
@@ -48,7 +49,7 @@ class _BirthdayPageState extends State<BirthdayPage> {
       });
       _filterBySelectedDate();
 
-      // Optional: persist safe cache like in your CustomerScreen
+      // Optional: persist safe cache
       final prefs = await SharedPreferences.getInstance();
       final safeList = fresh.map((c) {
         final m = c.toMap();
@@ -206,34 +207,28 @@ class _BirthdayPageState extends State<BirthdayPage> {
     }
   }
 
-  // Navigation helpers (same style as your CustomerScreen)
+  // Navigation helpers
   void _navigateToDashboard() {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const Dashboardpage()),
-    );
+    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Dashboardpage()));
   }
 
   void _navigateToCustomers() {
-    Navigator.pop(context); // If you came from CustomerScreen
+    Navigator.pop(context);
   }
 
   void _navigateToAddUserPage() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const AddNewUserPage()),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const AddNewUserPage()));
   }
 
   void _navigateToEvents() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const BirthdayPage()),
-    );
+    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AnniversaryPage()));
+  }
+
+  void _openAnniversaries() {
+    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AnniversaryPage()));
   }
 
   Future<void> _openCustomerDetail(model.Customer baseCustomer) async {
-    // Optional: fetch full details like your CustomerScreen before navigating to details
     final baseMap = baseCustomer.toMap();
     final id = (baseMap['serverId'] ?? baseMap['id'] ?? '').toString();
     model.Customer detailed = baseCustomer;
@@ -245,8 +240,9 @@ class _BirthdayPageState extends State<BirthdayPage> {
         builder: (_) => const Center(child: CircularProgressIndicator()),
       );
       try {
-        final fetched = await _api.getCustomerById(id);
-        if (fetched != null) detailed = fetched;
+        // If you have a details API, fetch here (optional)
+        // final fetched = await _api.getCustomerById(id);
+        // if (fetched != null) detailed = fetched;
       } catch (e) {
         debugPrint('[BirthdayPage] getCustomerById($id) failed: $e');
       } finally {
@@ -272,7 +268,6 @@ class _BirthdayPageState extends State<BirthdayPage> {
         onRefresh: _loadCustomers,
         child: CustomScrollView(
           slivers: [
-            // Same SliverAppBar UI as CustomerScreen
             SliverAppBar(
               expandedHeight: 70,
               pinned: true,
@@ -308,9 +303,9 @@ class _BirthdayPageState extends State<BirthdayPage> {
                   onPressed: _loadCustomers,
                 ),
               ],
-              flexibleSpace: FlexibleSpaceBar(
-                background: Container(
-                  decoration: const BoxDecoration(
+              flexibleSpace: const FlexibleSpaceBar(
+                background: DecoratedBox(
+                  decoration: BoxDecoration(
                     image: DecorationImage(
                       image: AssetImage("assets/images/Background2.jpeg"),
                       fit: BoxFit.cover,
@@ -320,7 +315,7 @@ class _BirthdayPageState extends State<BirthdayPage> {
               ),
             ),
 
-            // Header block: date line + Today button
+            // Header block: with switch
             SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: padding, vertical: 12),
@@ -338,21 +333,32 @@ class _BirthdayPageState extends State<BirthdayPage> {
                     ],
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.cake_outlined, color: Colors.pink),
-                      const SizedBox(width: 10),
-                      Text(
-                        'Birthdays on ${_formatDate(_selectedDate, includeYear: true)}',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      _EventSwitchBar(
+                        showAnniversaries: false,
+                        onBirthdaysTap: () {}, // already here
+                        onAnniversariesTap: _openAnniversaries,
                       ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () {
-                          setState(() => _selectedDate = DateTime.now());
-                          _filterBySelectedDate();
-                        },
-                        child: const Text('Today'),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          const Icon(Icons.cake_outlined, color: Colors.pink),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Birthdays on ${_formatDate(_selectedDate, includeYear: true)}',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () {
+                              setState(() => _selectedDate = DateTime.now());
+                              _filterBySelectedDate();
+                            },
+                            child: const Text('Today'),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -441,7 +447,7 @@ class _BirthdayPageState extends State<BirthdayPage> {
     );
   }
 
-  // Bottom nav UI like your CustomerScreen; mark Events as selected here
+  // Bottom nav UI; make Events go to Anniversaries
   Widget _buildBottomNavigationBar() {
     final screenWidth = MediaQuery.of(context).size.width;
     final navHeight = screenWidth * 0.18;
@@ -512,7 +518,7 @@ class _CustomerWithDob {
   const _CustomerWithDob({required this.customer, required this.dob});
 }
 
-// Card UI (clone of your CustomerCard with optional subtitle)
+// Card UI (same style as Anniversary card)
 class EventCustomerCard extends StatelessWidget {
   final model.Customer customer;
   final String? subtitle;
@@ -694,6 +700,73 @@ class EventCustomerCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// Simple two-button switch bar used by both pages
+class _EventSwitchBar extends StatelessWidget {
+  final bool showAnniversaries; // true => Anniversaries selected, false => Birthdays selected
+  final VoidCallback onBirthdaysTap;
+  final VoidCallback onAnniversariesTap;
+
+  const _EventSwitchBar({
+    required this.showAnniversaries,
+    required this.onBirthdaysTap,
+    required this.onAnniversariesTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedStyle = ElevatedButton.styleFrom(
+      backgroundColor: const Color(0xFF38B6E4),
+      foregroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      elevation: 0,
+      padding: const EdgeInsets.symmetric(vertical: 10),
+    );
+
+    final unselectedStyle = OutlinedButton.styleFrom(
+      foregroundColor: Colors.grey.shade700,
+      side: BorderSide(color: Colors.grey.shade300),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+    );
+
+    return Row(
+      children: [
+        Expanded(
+          child: showAnniversaries
+              ? OutlinedButton.icon(
+                  onPressed: onBirthdaysTap,
+                  icon: const Icon(Icons.cake_outlined),
+                  label: const Text('Birthdays'),
+                  style: unselectedStyle,
+                )
+              : ElevatedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.cake),
+                  label: const Text('Birthdays'),
+                  style: selectedStyle,
+                ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: showAnniversaries
+              ? ElevatedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.favorite),
+                  label: const Text('Anniversaries'),
+                  style: selectedStyle,
+                )
+              : OutlinedButton.icon(
+                  onPressed: onAnniversariesTap,
+                  icon: const Icon(Icons.favorite_border),
+                  label: const Text('Anniversaries'),
+                  style: unselectedStyle,
+                ),
+        ),
+      ],
     );
   }
 }

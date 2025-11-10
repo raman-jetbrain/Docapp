@@ -247,7 +247,7 @@ class _DashboardpageState extends State<Dashboardpage> {
   Future<void> _navigateEventsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => const BirthdayPage(),
+        builder: (_) => const AnniversaryPage(),
       ), // no customer required
     );
     if (mounted) _loadCustomerData();
