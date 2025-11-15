@@ -10,11 +10,7 @@ class _DocCard extends StatelessWidget {
     required this.onShare,
     required this.borderColor,
     required this.iconColor,
-    required this.selected, 
-    this.onDownload, 
-    this.onLongPress, 
-    this.onDelete, 
-    this.onEdit,
+    required this.selected, this.onDownload, this.onLongPress, this.onDelete, this.onEdit,
   });
   final String title;
   final VoidCallback onTap;

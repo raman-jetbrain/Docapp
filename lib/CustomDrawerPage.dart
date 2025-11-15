@@ -1,7 +1,6 @@
 import 'package:docapp/dashboardpage.dart';
 import 'package:docapp/login/Loginpage.dart';
 import 'package:flutter/material.dart';
-import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const String kTokenKey = 'auth_token';

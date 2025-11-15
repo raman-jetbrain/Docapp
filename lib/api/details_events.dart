@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/storage/Token_storage.dart';

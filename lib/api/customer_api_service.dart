@@ -151,7 +151,7 @@ class CustomerApiService {
     final token = await _resolveToken();
     if (token == null || token.isEmpty) throw Exception('Missing auth token');
 
-    final uri = _buildUri(baseUrl, '/api/CustomerDataM/GetAllAsync');
+    final uri = _buildUri(baseUrl, '/api/CustomerDataM/GetAsync');
     final headers = {'Accept': 'application/json', 'Authorization': 'Bearer $token'};
 
     _logRequest(method: 'GET', uri: uri, headers: headers);
@@ -310,7 +310,7 @@ class CustomerApiService {
     dynamic rawChildName =
         m['ChildName'] ?? m['childName'] ?? m['Child'] ?? m['child'];
 
-    List<String> _normalizeChildren(dynamic a, dynamic b) {
+    List<String> normalizeChildren(dynamic a, dynamic b) {
       final out = <String>[];
       void add(dynamic v) {
         if (v == null) return;
@@ -345,7 +345,7 @@ class CustomerApiService {
       return out.where((e) => seen.add(e)).toList();
     }
 
-    final childrenList = _normalizeChildren(rawChildren, rawChildName);
+    final childrenList = normalizeChildren(rawChildren, rawChildName);
 
     return model.Customer.fromMap(<String, dynamic>{
       'id': id,

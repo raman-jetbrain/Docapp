@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:docapp/api/customer_api_service.dart';
 import 'package:docapp/dashboardpage.dart';
-import 'package:docapp/dateventspage.dart';
 import 'package:docapp/pages/adduserpage%20.dart';
 import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/documentspage.dart';

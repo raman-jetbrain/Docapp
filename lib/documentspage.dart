@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-
+import 'package:pdfx/pdfx.dart';
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/model/DocumentsItem.dart' show DocumentItem;
 import 'package:docapp/model/customer.dart' as model;
@@ -13,15 +13,11 @@ import 'package:image/image.dart' as img;
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:pdfx/pdfx.dart';
 import 'package:share_plus/share_plus.dart';
 
-// ---------------- Limits ----------------
-const int kMaxUploadBytes = 2 * 1024 * 1024; // 2 MB payload limit
-// base64 adds ~33%; keep raw <= ~1.5 MB so base64 stays under 2 MB
+const int kMaxUploadBytes = 2 * 1024 * 1024; 
 const int kRawBudgetForBase64 = ((kMaxUploadBytes * 3) ~/ 4) - 8 * 1024;
 
-// ---------------- HTTP logging (REQ/RES to terminal, redacts FileData) ----------------
 const bool kLogHttpDocs = true;
 
 String _maskTokenDocs(String? v) {
@@ -1329,7 +1325,6 @@ class ImageViewerScreen extends StatelessWidget {
   }
 }
 
-// PDF viewer (local file path)
 class PdfViewerScreen extends StatefulWidget {
   const PdfViewerScreen({super.key, required this.path, required this.title});
   final String path;
@@ -1345,7 +1340,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   @override
   void initState() {
     super.initState();
-    controller = PdfControllerPinch(document: PdfDocument.openFile(widget.path));
+    controller = PdfControllerPinch(
+      document: PdfDocument.openFile(widget.path),
+    );
   }
 
   @override
@@ -1357,7 +1354,10 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title), backgroundColor: const Color(0xFF38B6E4)),
+      appBar: AppBar(
+        title: Text(widget.title),
+        backgroundColor: const Color(0xFF38B6E4),
+      ),
       body: PdfViewPinch(controller: controller),
     );
   }

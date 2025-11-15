@@ -5,7 +5,6 @@ import 'package:docapp/birthdaylist.dart';
 import 'package:docapp/pages/adduserpage%20.dart';
 import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/dashboardpage.dart' hide CustomerApiService;
-import 'package:docapp/dateventspage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/model/customer.dart' as model;
 import 'package:flutter/material.dart';
@@ -244,8 +243,12 @@ class _CustomerScreenState extends State<CustomerScreen> {
         if (seen.add(key)) combined.add(c);
       }
 
-      for (final c in directMatches) add(c);
-      for (final c in family) add(c);
+      for (final c in directMatches) {
+        add(c);
+      }
+      for (final c in family) {
+        add(c);
+      }
 
       result = combined;
     } else {

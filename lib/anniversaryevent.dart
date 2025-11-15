@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:docapp/birthdaylist.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -325,21 +324,24 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
     final mNet = RegExp(r'^/Date\((\d+)\)/$').firstMatch(s0);
     if (mNet != null) {
       final ms = int.tryParse(mNet.group(1)!);
-      if (ms != null)
+      if (ms != null) {
         return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+      }
     }
 
     // digits-only epoch
     if (RegExp(r'^\d+$').hasMatch(s0)) {
       final n = int.tryParse(s0);
       if (n != null) {
-        if (s0.length >= 12)
+        if (s0.length >= 12) {
           return DateTime.fromMillisecondsSinceEpoch(n, isUtc: true).toLocal();
-        if (s0.length == 10)
+        }
+        if (s0.length == 10) {
           return DateTime.fromMillisecondsSinceEpoch(
             n * 1000,
             isUtc: true,
           ).toLocal();
+        }
       }
     }
 

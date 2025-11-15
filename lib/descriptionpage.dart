@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/api/description_api.dart'; // Must implement required methods
@@ -234,8 +233,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
 
     // Gender
     final g = (r['Gender'] ?? '').toString().trim().toLowerCase();
-    if (g.startsWith('m')) _gender = 'Male';
-    else if (g.startsWith('f')) _gender = 'Female';
+    if (g.startsWith('m')) {
+      _gender = 'Male';
+    } else if (g.startsWith('f')) _gender = 'Female';
     else if (g.isEmpty) _gender = null;
     else _gender = 'TransGender';
 
@@ -319,8 +319,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
     _avatarBytes = c.imageBytes;
 
     final g = (c.gender ?? '').trim().toLowerCase();
-    if (g.startsWith('m')) _gender = 'Male';
-    else if (g.startsWith('f')) _gender = 'Female';
+    if (g.startsWith('m')) {
+      _gender = 'Male';
+    } else if (g.startsWith('f')) _gender = 'Female';
     else if (g.isEmpty) _gender = null;
     else _gender = 'TransGender';
 
