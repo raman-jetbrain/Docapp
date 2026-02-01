@@ -66,7 +66,7 @@ class CustomerApi {
 
   // ---------- API calls ----------
   Future<List<dynamic>> getCustomers(String token) async {
-    final url = '$apiBaseWithApi/CustomerDataM/GetAsync';
+    final url = '$apiBaseWithApi/CustomerDataM/GetAllAsync';
     final res = await http.get(
       Uri.parse(url),
       headers: {
@@ -93,13 +93,16 @@ class CustomerApi {
       },
     );
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw Exception(extractServerError(res.body) ?? 'Server error ${res.statusCode}');
+      throw Exception(
+        extractServerError(res.body) ?? 'Server error ${res.statusCode}',
+      );
     }
     final decoded = jsonDecode(res.body);
     return unwrapApi(decoded);
   }
 
-  Future<List<Map<String, dynamic>>> getDocumentsViaPost(String token, int customerId) async {
+  Future<List<Map<String, dynamic>>> getDocumentsViaPost(
+      String token, int customerId) async {
     final url = '$apiBaseWithApi/CustomerDataM/FileRecordGetAsync';
     final res = await http.post(
       Uri.parse(url),
@@ -131,19 +134,31 @@ class CustomerApi {
       docs = payload['Items'] as List;
     }
 
-    return docs.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    return docs
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
   }
 
-  // -------- Update (PUT) - updated to build server payload exactly as required --------
-  Future<Map<String, dynamic>> updateCustomer(String token, Map<String, dynamic> raw) async {
+  // -------- Update (PUT) --------
+  //
+  // parentIdOverride is used when you edit a CHILD and want to force its parent.
+  Future<Map<String, dynamic>> updateCustomer(
+    String token,
+    Map<String, dynamic> raw, {
+    int? parentIdOverride,
+  }) async {
     final headers = <String, String>{
       "Content-Type": "application/json; charset=utf-8",
       "Accept": "application/json",
       "Authorization": "Bearer $token",
     };
 
-    // Build the exact server payload shape (normalizes keys, dates, and files)
-    final payload = _buildUpdatePayload(raw);
+    // Build the exact server payload shape (normalizes keys, dates, files, children)
+    final payload = _buildUpdatePayload(
+      raw,
+      parentIdOverride: parentIdOverride,
+    );
 
     final candidates = <String>[
       '$apiBaseWithApi/CustomerDataM/UpdateAsync',
@@ -154,26 +169,108 @@ class CustomerApi {
     http.Response? last;
     for (final url in candidates) {
       try {
-        final res = await http.put(Uri.parse(url), headers: headers, body: jsonEncode(payload));
+        final res = await http.put(
+          Uri.parse(url),
+          headers: headers,
+          body: jsonEncode(payload),
+        );
         if (res.statusCode >= 200 && res.statusCode < 300) {
           final body = res.body.trim();
           if (body.isEmpty) return {};
           try {
             final decoded = jsonDecode(body);
-            return decoded is Map<String, dynamic> ? decoded : {'Response': decoded};
+            return decoded is Map<String, dynamic>
+                ? decoded
+                : {'Response': decoded};
           } catch (_) {
             return {"message": body, "status": res.statusCode};
           }
         }
         last = res;
         if (res.statusCode == 404) continue;
-        throw Exception(extractServerError(res.body) ?? 'Server error ${res.statusCode}');
+        throw Exception(
+          extractServerError(res.body) ?? 'Server error ${res.statusCode}',
+        );
       } catch (_) {}
     }
     if (last != null) {
-      throw Exception(extractServerError(last.body) ?? 'Server error ${last.statusCode}');
+      throw Exception(
+        extractServerError(last.body) ?? 'Server error ${last.statusCode}',
+      );
     }
     throw Exception('No reachable Update endpoint');
+  }
+
+  /// Helper to update a CHILD record when you already have the child object.
+  /// Here:
+  ///   child["Id"]                = CHILD row id
+  ///   parentId (parameter)      = PARENT id
+  Future<Map<String, dynamic>> updateChildCustomer(
+    String token, {
+    required int parentId,
+    required Map<String, dynamic> child,
+  }) async {
+    // Make sure we don't mutate caller's map
+    final raw = Map<String, dynamic>.from(child);
+
+    // Force the parent id in the payload
+    raw['ParentCustomerDataId'] = parentId;
+    raw['ParentId'] = parentId;
+    raw['parentId'] = parentId;
+
+    return updateCustomer(
+      token,
+      raw,
+      parentIdOverride: parentId,
+    );
+  }
+
+  /// SPECIAL HELPER FOR YOUR CASE:
+  ///
+  /// UI sends:
+  ///   "Id"                 = PARENT id
+  ///   "ParentCustomerDataId" = CHILD id
+  ///
+  /// This method flips them so the API receives:
+  ///   Id = childId
+  ///   ParentCustomerDataId = parentId
+  ///
+  Future<Map<String, dynamic>> updateChildByFlippedIds(
+    String token,
+    Map<String, dynamic> raw,
+  ) async {
+    final parentId = _toInt(
+      raw['Id'] ??
+          raw['id'] ??
+          raw['ParentId'] ??
+          raw['parentId'],
+    );
+    final childId = _toInt(
+      raw['ParentCustomerDataId'] ??
+          raw['parentCustomerDataId'] ??
+          raw['ChildId'] ??
+          raw['childId'],
+    );
+
+    if (parentId == null || childId == null) {
+      throw ArgumentError(
+        'Both parent (Id) and child (ParentCustomerDataId) must be provided',
+      );
+    }
+
+    final child = Map<String, dynamic>.from(raw);
+
+    // flip meaning: now we tell backend we are editing the child row
+    child['Id'] = childId; // this is the row being updated
+    child['ParentCustomerDataId'] = parentId; // this is its parent
+    child['ParentId'] = parentId;
+    child['parentId'] = parentId;
+
+    return updateCustomer(
+      token,
+      child,
+      parentIdOverride: parentId,
+    );
   }
 
   Future<void> deleteCustomer(String token, int id) async {
@@ -194,11 +291,15 @@ class CustomerApi {
         if (res.statusCode >= 200 && res.statusCode < 300) return;
         last = res;
         if (res.statusCode == 404) continue;
-        throw Exception(extractServerError(res.body) ?? 'Server error ${res.statusCode}');
+        throw Exception(
+          extractServerError(res.body) ?? 'Server error ${res.statusCode}',
+        );
       } catch (_) {}
     }
     if (last != null) {
-      throw Exception(extractServerError(last.body) ?? 'Server error ${last.statusCode}');
+      throw Exception(
+        extractServerError(last.body) ?? 'Server error ${last.statusCode}',
+      );
     }
     throw Exception('No reachable Delete endpoint');
   }
@@ -228,7 +329,11 @@ class CustomerApi {
     return false;
   }
 
-  Future<bool> deleteDocByPostEndpoint(String token, {required dynamic id, required int? customerId}) async {
+  Future<bool> deleteDocByPostEndpoint(
+    String token, {
+    required dynamic id,
+    required int? customerId,
+  }) async {
     final headers = <String, String>{
       'Accept': 'application/json',
       'Authorization': 'Bearer $token',
@@ -271,7 +376,9 @@ class CustomerApi {
   Future<Uint8List?> fetchBytesWithAuth(String? token, String url) async {
     try {
       final headers = <String, String>{'Accept': '*/*'};
-      if (token != null && token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+      if (token != null && token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
       final res = await http.get(Uri.parse(url), headers: headers);
       if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
     } catch (_) {}
@@ -280,25 +387,47 @@ class CustomerApi {
 
   // ---------- Normalization helpers for Update payload ----------
 
-  Map<String, dynamic> _buildUpdatePayload(Map<String, dynamic> src) {
+  Map<String, dynamic> _buildUpdatePayload(
+    Map<String, dynamic> src, {
+    int? parentIdOverride,
+  }) {
     // Core fields (accept uppercase/lowercase aliases)
     final id = _toInt(src['Id'] ?? src['id']);
-    final parentId = _toInt(src['ParentCustomerDataId'] ?? src['parentCustomerDataId']);
+
+    // Parent id:
+    //  - use override if provided (for editing children)
+    //  - otherwise read from any known key
+    final parentId = parentIdOverride ??
+        _toInt(
+          src['ParentCustomerDataId'] ??
+              src['parentCustomerDataId'] ??
+              src['ParentId'] ??
+              src['parentId'],
+        );
+
     final name = _str(src['Name'] ?? src['name']);
     final surname = _str(src['Surname'] ?? src['surname']);
-    final phoneNumber = _str(src['PhoneNumber'] ?? src['phone'] ?? src['Phone']);
+    final phoneNumber =
+        _str(src['PhoneNumber'] ?? src['phone'] ?? src['Phone']);
     final fileId = _toInt(src['FileId'] ?? src['fileId']);
     final emailId = _str(src['EmailId'] ?? src['email'] ?? src['Email']);
     final address = _str(src['Address'] ?? src['address']);
     final gender = _str(src['Gender'] ?? src['gender']);
     final others = _str(src['Others'] ?? src['others']);
-    final martialStatus = _str(src['MartialStatus'] ?? src['martialStatus'] ?? src['maritalStatus']);
+    final martialStatus = _str(
+      src['MartialStatus'] ?? src['martialStatus'] ?? src['maritalStatus'],
+    );
 
     // Dates
     final dob = _iso(src['DOB'] ?? src['dob']);
     final sdob = _iso(src['SDOB'] ?? src['sdob']);
     final marriedDate = _iso(
-      src['MarriedDate'] ?? src['marriedDate'] ?? src['Anniversary'] ?? src['anniversary'] ?? src['MarriageDate'] ?? src['marriageDate'],
+      src['MarriedDate'] ??
+          src['marriedDate'] ??
+          src['Anniversary'] ??
+          src['anniversary'] ??
+          src['MarriageDate'] ??
+          src['marriageDate'],
     );
 
     // HttpFileData (single profile file)
@@ -310,8 +439,10 @@ class CustomerApi {
       // try to build from common fields
       final imageBytes = src['imageBytes'];
       final imageB64 = src['imageB64'] ?? src['ImageB64'];
-      final fileName = _str(src['fileName'] ?? src['FileName']) ?? 'profile.png';
-      final fileType = _str(src['fileType'] ?? src['FileType']) ?? 'image/png';
+      final fileName =
+          _str(src['fileName'] ?? src['FileName']) ?? 'profile.png';
+      final fileType =
+          _str(src['fileType'] ?? src['FileType']) ?? 'image/png';
       final b64 = _b64(imageBytes ?? imageB64 ?? others);
       if (b64 != null && b64.isNotEmpty) {
         httpFileData = {
@@ -333,16 +464,57 @@ class CustomerApi {
     if (rawDocs is List) {
       documents = rawDocs
           .whereType<dynamic>()
-          .map((e) => _normalizeFileRecord(_asMap(e) ?? {}, defaultCustomerId: id))
+          .map((e) => _normalizeFileRecord(
+                _asMap(e) ?? {},
+                defaultCustomerId: id,
+              ))
           .toList();
     }
 
-    // ChildDatas passthrough if provided
-    List<dynamic>? childDatas;
-    final rawChildren = src['ChildDatas'] ?? src['childDatas'] ?? src['children'] ?? src['Childs'];
-    if (rawChildren is List) childDatas = rawChildren;
+    // ChildDatas: normalize and ensure ParentCustomerDataId for each child
+    List<Map<String, dynamic>>? childDatas;
+    final rawChildren =
+        src['ChildDatas'] ?? src['childDatas'] ?? src['children'] ?? src['Childs'];
+    if (rawChildren is List) {
+      final parentForChildren = parentId ?? id;
+      final kids = <Map<String, dynamic>>[];
+      for (final c in rawChildren) {
+        if (c is! Map) continue;
+        final cm = Map<String, dynamic>.from(c);
 
-    // Build final payload and strip nulls
+        // Normalize child Id
+        final childId = _toInt(cm['Id'] ?? cm['id']);
+        if (childId != null) cm['Id'] = childId;
+
+        // Normalize DOB to ISO
+        final childDobIso = _iso(cm['DOB'] ?? cm['Dob'] ?? cm['DateOfBirth']);
+        if (childDobIso != null) cm['DOB'] = childDobIso;
+
+        // Normalize Gender key
+        final g = _str(cm['Gender'] ?? cm['gender']);
+        if (g != null) cm['Gender'] = g;
+
+        // Ensure ParentCustomerDataId for each child
+        final childParentId = _toInt(
+              cm['ParentCustomerDataId'] ?? cm['parentCustomerDataId'],
+            ) ??
+            parentForChildren;
+        if (childParentId != null) {
+          cm['ParentCustomerDataId'] = childParentId;
+        }
+
+        // Remove old alias keys to avoid conflicts
+        cm.remove('Dob');
+        cm.remove('DateOfBirth');
+        cm.remove('gender');
+        cm.remove('parentCustomerDataId');
+
+        kids.add(_removeNulls(cm));
+      }
+      if (kids.isNotEmpty) childDatas = kids;
+    }
+
+    // Build final payload and strip nulls / empties
     final out = <String, dynamic>{
       'Id': id,
       'ParentCustomerDataId': parentId,
@@ -356,7 +528,7 @@ class CustomerApi {
       'Others': others,
       'DOB': dob,
       'SDOB': sdob,
-      'MartialStatus': martialStatus, // note: server uses "MartialStatus" (typo kept intentionally)
+      'MartialStatus': martialStatus, // server uses "MartialStatus"
       'MarriedDate': marriedDate,
       if (httpFileData != null) 'HttpFileData': _removeNulls(httpFileData),
       if (childDatas != null) 'ChildDatas': childDatas,
@@ -366,16 +538,22 @@ class CustomerApi {
     return _removeNulls(out);
   }
 
-  Map<String, dynamic> _normalizeFileRecord(Map<String, dynamic> m, {int? defaultCustomerId}) {
+  Map<String, dynamic> _normalizeFileRecord(
+    Map<String, dynamic> m, {
+    int? defaultCustomerId,
+  }) {
     // Normalize FileData (accept data URLs, raw base64, or bytes in 'bytes')
     final fileData = _b64(m['FileData'] ?? m['fileData'] ?? m['bytes']);
     final fileName = _str(m['FileName'] ?? m['fileName']);
     final fileType = _str(m['FileType'] ?? m['fileType']);
     final id = _toInt(m['Id'] ?? m['id']);
-    final isModified = _toBool(m['IsModified'] ?? m['isModified']) ?? (fileData != null);
+    final isModified =
+        _toBool(m['IsModified'] ?? m['isModified']) ?? (fileData != null);
     final isDeleted = _toBool(m['IsDeleted'] ?? m['isDeleted']) ?? false;
     final remarks = _str(m['Remarks'] ?? m['remarks']);
-    final custId = _toInt(m['CustomerDataId'] ?? m['customerDataId'] ?? defaultCustomerId);
+    final custId = _toInt(
+      m['CustomerDataId'] ?? m['customerDataId'] ?? defaultCustomerId,
+    );
 
     return {
       'Id': id,
@@ -438,15 +616,24 @@ class CustomerApi {
     final mNet = RegExp(r'^/Date\((\d+)\)/$').firstMatch(s0);
     if (mNet != null) {
       final ms = int.tryParse(mNet.group(1)!);
-      if (ms != null) return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toIso8601String();
+      if (ms != null) {
+        return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true)
+            .toIso8601String();
+      }
     }
 
     // pure digits epoch
     if (RegExp(r'^\d+$').hasMatch(s0)) {
       final n = int.tryParse(s0);
       if (n != null) {
-        if (s0.length >= 12) return DateTime.fromMillisecondsSinceEpoch(n, isUtc: true).toIso8601String();
-        if (s0.length == 10) return DateTime.fromMillisecondsSinceEpoch(n * 1000, isUtc: true).toIso8601String();
+        if (s0.length >= 12) {
+          return DateTime.fromMillisecondsSinceEpoch(n, isUtc: true)
+              .toIso8601String();
+        }
+        if (s0.length == 10) {
+          return DateTime.fromMillisecondsSinceEpoch(n * 1000, isUtc: true)
+              .toIso8601String();
+        }
       }
     }
 

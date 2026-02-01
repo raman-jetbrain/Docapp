@@ -1,9 +1,14 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:docapp/birthdaylist.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/foundation.dart';
-import 'package:docapp/api/customer_api_service.dart';
+import 'package:docapp/api/api_constant.dart';
+import 'package:docapp/storage/Token_storage.dart';
+
 import 'package:docapp/dashboardpage.dart';
 import 'package:docapp/pages/adduserpage%20.dart';
 import 'package:docapp/pages/customerdetailpage.dart';
@@ -21,106 +26,125 @@ class AnniversaryPage extends StatefulWidget {
 class _AnniversaryPageState extends State<AnniversaryPage> {
   static const Color kPrimaryBlue = Color(0xFF38B6E4);
 
-  // Use your API service (no GetAsync/{id} calls in this page)
-  final CustomerApiService _api = CustomerApiService();
-
   bool _isLoading = false;
   String? _error;
 
-  List<_CustomerWithAnniv> _enriched = [];
+  List<model.Customer> _all = [];
   List<_CustomerWithAnniv> _matches = [];
   DateTime _selectedDate = DateTime.now();
-
-  // Cache keys (customer + parsed anniversary + avatarUrl)
-  static const _kAnnivCache = 'anniversary_customers_local_v1';
-  static const _kAnnivCacheUpdatedAt = 'anniversary_customers_updated_at_v1';
 
   @override
   void initState() {
     super.initState();
-    _loadAnniversaries();
+    _loadCustomers();
   }
 
-  // Load from local storage first; if empty, fetch from API and cache
-  Future<void> _loadAnniversaries() async {
+  // ---------------- API helpers ----------------
+
+  String get _apiBaseNormalized {
+    var b = ApiConstants.baseUrl.trim();
+    if (b.endsWith('/')) b = b.substring(0, b.length - 1);
+    if (!b.toLowerCase().endsWith('/api')) b = '$b/api';
+    return b;
+  }
+
+  /// Fetch all customers using /api/CustomerDataM/GetAllAsync
+  Future<List<model.Customer>> _fetchCustomersFromApi() async {
+    final token = await TokenStorage.getToken();
+
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+
+    final uri = Uri.parse('$_apiBaseNormalized/CustomerDataM/GetAllAsync');
+
+    final res = await http.get(uri, headers: headers);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    }
+
+    final decoded = jsonDecode(res.body);
+
+    dynamic payload = decoded;
+    if (payload is Map && payload['Response'] != null) {
+      payload = payload['Response'];
+    }
+
+    List list;
+    if (payload is List) {
+      list = payload;
+    } else if (payload is Map && payload['Data'] is List) {
+      list = payload['Data'];
+    } else if (payload is Map && payload['data'] is List) {
+      list = payload['data'];
+    } else {
+      throw Exception(
+        'Unexpected response format from /CustomerDataM/GetAllAsync',
+      );
+    }
+
+    final out = <model.Customer>[];
+
+    for (final e in list) {
+      if (e is! Map) continue;
+      final m = Map<String, dynamic>.from(e);
+
+      final Map<String, dynamic> effective =
+          (m['CustomerData'] is Map)
+              ? Map<String, dynamic>.from(m['CustomerData'])
+              : m;
+
+      final c = model.Customer.fromMap(effective);
+      out.add(c);
+    }
+
+    return out;
+  }
+
+  // ---------------- Load + filter ----------------
+
+  Future<void> _loadCustomers() async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
-
     try {
-      final cached = await _loadAnnivCache();
-      if (cached.isNotEmpty && mounted) {
-        setState(() {
-          _enriched = cached;
-          _applyDateFilter();
-        });
-        setState(() => _isLoading = false);
-        return;
-      }
-    } catch (_) {}
-
-    // If no cache, fetch once from API and cache it
-    try {
-      final fresh = await _fetchEnrichedFromApi();
-      await _saveAnnivCache(fresh);
-      if (!mounted) return;
+      final fresh = await _fetchCustomersFromApi();
       setState(() {
-        _enriched = fresh;
-        _applyDateFilter();
+        _all = fresh;
       });
+      _filterBySelectedDate();
+
+      // Optional cache (without images)
+      final prefs = await SharedPreferences.getInstance();
+      final safeList = fresh.map((c) {
+        final m = c.toMap();
+        m.remove('imageBytes');
+        m.remove('imageB64');
+        return m;
+      }).toList();
+      await prefs.setString('anniversary_customers', json.encode(safeList));
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // Manual refresh: fetch GetAllAsync again and update cache
-  Future<void> _refreshFromApi() async {
-    setState(() => _isLoading = true);
-    try {
-      final fresh = await _fetchEnrichedFromApi();
-      await _saveAnnivCache(fresh);
-      if (!mounted) return;
-      setState(() {
-        _enriched = fresh;
-        _applyDateFilter();
-      });
-    } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
+  Future<void> _refreshFromApi() => _loadCustomers();
 
-  // Build enriched list from GetAllAsync ONLY (no GetAsync/{id})
-  Future<List<_CustomerWithAnniv>> _fetchEnrichedFromApi() async {
-    final basics = await _api
-        .getCustomers(); // must return the Response[] array
-    if (basics.isEmpty) return [];
-
-    return basics
+  void _filterBySelectedDate() {
+    final matches = _all
         .map((c) {
-          final m = _safeToMap(c);
-          final ann = _annivFromAnyMap(m); // reads MarriedDate et al
-          final avatarUrl = _imageUrlFromAnyMap(
-            m,
-          ); // reads HttpFileData.FileName or Others
-          return _CustomerWithAnniv(
-            customer: c,
-            anniversary: ann,
-            avatarUrl: avatarUrl,
-          );
+          final anniv = _getAnniversaryFromCustomer(c);
+          return _CustomerWithAnniv(customer: c, anniversary: anniv);
         })
-        .toList(growable: false);
-  }
-
-  void _applyDateFilter() {
-    final filtered = _enriched
         .where((x) => _matchesMonthDay(x.anniversary, _selectedDate))
         .toList();
-    filtered.sort((a, b) {
+
+    // Sort by surname+name
+    matches.sort((a, b) {
       final as = '${a.customer.surname} ${a.customer.name}'
           .toLowerCase()
           .trim();
@@ -129,266 +153,23 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
           .trim();
       return as.compareTo(bs);
     });
-    _matches = filtered;
+
+    setState(() => _matches = matches);
   }
 
-  // -----------------------------
-  // Cache enriched list
-  // -----------------------------
-  Future<void> _saveAnnivCache(List<_CustomerWithAnniv> items) async {
-    final prefs = await SharedPreferences.getInstance();
-    final list = items.map((e) {
-      final cm = _safeToMap(e.customer);
-      cm.remove('imageBytes'); // avoid raw bytes in prefs
-      return {
-        'customer': _jsonSafeMap(cm),
-        'anniversary': e.anniversary?.toIso8601String(),
-        'avatarUrl': e.avatarUrl,
-      };
-    }).toList();
+  /// Read anniversary from the Customer model:
+  /// - maritalStatus (or MartialStatus/MaritalStatus in API) must be "Married"
+  /// - marriedDate (MarriedDate) string must parse to a DateTime
+  DateTime? _getAnniversaryFromCustomer(model.Customer c) {
+    final status = (c.maritalStatus ?? '').toLowerCase();
+    if (status != 'married') return null;
 
-    await prefs.setString(_kAnnivCache, jsonEncode(list));
-    await prefs.setString(
-      _kAnnivCacheUpdatedAt,
-      DateTime.now().toIso8601String(),
-    );
-  }
+    final s = c.marriedDate;
+    if (s == null || s.isEmpty) return null;
 
-  Future<List<_CustomerWithAnniv>> _loadAnnivCache() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kAnnivCache);
-    if (raw == null || raw.isEmpty) return [];
-    try {
-      final list = (jsonDecode(raw) as List)
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-      return list
-          .map<_CustomerWithAnniv>((e) {
-            final custMap = Map<String, dynamic>.from(e['customer'] as Map);
-            final cust = model.Customer.fromMap(custMap);
-            final annStr = e['anniversary']?.toString();
-            final ann = annStr == null || annStr.isEmpty
-                ? null
-                : DateTime.tryParse(annStr);
-            final avatarUrl = e['avatarUrl']?.toString();
-            return _CustomerWithAnniv(
-              customer: cust,
-              anniversary: ann,
-              avatarUrl: avatarUrl,
-            );
-          })
-          .toList(growable: false);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  Map<String, dynamic> _jsonSafeMap(Map<String, dynamic> input) {
-    final out = <String, dynamic>{};
-    input.forEach((k, v) => out[k] = _jsonSafeValue(v));
-    return out;
-  }
-
-  dynamic _jsonSafeValue(dynamic v) {
-    if (v == null) return null;
-    if (v is Uint8List) return base64Encode(v);
-    if (v is DateTime) return v.toIso8601String();
-    if (v is Map) return _jsonSafeMap(Map<String, dynamic>.from(v));
-    if (v is List) return v.map(_jsonSafeValue).toList();
-    if (v is num || v is String || v is bool) return v;
-    return v.toString();
-  }
-
-  // -----------------------------
-  // Anniversary parsing and helpers
-  // -----------------------------
-
-  Map<String, dynamic> _safeToMap(model.Customer c) {
-    try {
-      return c.toMap();
-    } catch (_) {
-      return {};
-    }
-  }
-
-  // Pick MarriedDate (and variants) directly from the list item
-  DateTime? _annivFromAnyMap(Map<String, dynamic> root) {
-    final keys = {
-      'MarriedDate',
-      'marriedDate',
-      'MarriageDate',
-      'marriageDate',
-      'AnniversaryDate',
-      'anniversaryDate',
-      'Anniversary',
-      'anniversary',
-      'WeddingDate',
-      'weddingDate',
-      'MarriedOn',
-      'marriedOn',
-      'DateOfMarriage',
-      'dateOfMarriage',
-      'DOM',
-      'dom',
-      'DOA',
-      'doa',
-    };
-
-    // Direct flat check
-    for (final entry in root.entries) {
-      final k = entry.key.toString();
-      if (keys.contains(k) || keys.contains(k.toLowerCase())) {
-        final d = _parseDateFlex(entry.value);
-        if (d != null) return d;
-      }
-    }
-
-    // Deep search (nested maps/lists)
-    final val = _findValueByKeysDeep(
-      root,
-      keys.map((e) => e.toString().toLowerCase()).toSet(),
-    );
-    if (val != null) {
-      final d = _parseDateFlex(val);
-      if (d != null) return d;
-    }
-
-    // Free-text fallback
-    final others = (root['others'] ?? root['Others'])?.toString().trim();
-    if (others != null && others.isNotEmpty) {
-      final d = _readDateFromFreeText(others);
-      if (d != null) return d;
-    }
-    return null;
-  }
-
-  // Extract avatar URL from HttpFileData.FileName or Others
-  String? _imageUrlFromAnyMap(Map<String, dynamic> root) {
-    try {
-      final http = root['HttpFileData'] ?? root['httpFileData'];
-      if (http is Map) {
-        final u = (http['FileName'] ?? http['fileName'])?.toString();
-        if (u != null && u.startsWith('http')) return u;
-      }
-    } catch (_) {}
-    final others = (root['Others'] ?? root['others'])?.toString();
-    if (others != null && others.startsWith('http')) return others;
-    return null;
-  }
-
-  dynamic _findValueByKeysDeep(
-    dynamic node,
-    Set<String> keysLower, [
-    int depth = 0,
-  ]) {
-    if (node == null || depth > 6) return null;
-
-    if (node is Map) {
-      for (final entry in node.entries) {
-        final k = entry.key.toString().toLowerCase();
-        if (keysLower.contains(k)) return entry.value;
-      }
-      for (final entry in node.entries) {
-        final v = _findValueByKeysDeep(entry.value, keysLower, depth + 1);
-        if (v != null) return v;
-      }
-    } else if (node is List) {
-      for (final item in node) {
-        final v = _findValueByKeysDeep(item, keysLower, depth + 1);
-        if (v != null) return v;
-      }
-    }
-    return null;
-  }
-
-  DateTime? _readDateFromFreeText(String text) {
-    final reg = RegExp(
-      r'(marriage\s*date|married\s*(date|on)|wedding\s*date|doa|dom)\s*[:\-]?\s*([0-9A-Za-z/\-\. ]{4,})',
-      caseSensitive: false,
-    );
-    final m = reg.firstMatch(text);
-    if (m == null) return null;
-    final raw = (m.group(3) ?? '').trim();
-    final cleaned = raw.split(RegExp(r'[^0-9A-Za-z/\-\. ]')).first.trim();
-    return _parseDateFlex(cleaned);
-  }
-
-  DateTime? _parseDateFlex(dynamic v) {
-    if (v == null) return null;
-    if (v is DateTime) return v.isUtc ? v.toLocal() : v;
-
-    final s0 = v.toString().trim();
-    if (s0.isEmpty || s0.toLowerCase() == 'null') return null;
-
-    // .NET /Date(ms)/
-    final mNet = RegExp(r'^/Date\((\d+)\)/$').firstMatch(s0);
-    if (mNet != null) {
-      final ms = int.tryParse(mNet.group(1)!);
-      if (ms != null) {
-        return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
-      }
-    }
-
-    // digits-only epoch
-    if (RegExp(r'^\d+$').hasMatch(s0)) {
-      final n = int.tryParse(s0);
-      if (n != null) {
-        if (s0.length >= 12) {
-          return DateTime.fromMillisecondsSinceEpoch(n, isUtc: true).toLocal();
-        }
-        if (s0.length == 10) {
-          return DateTime.fromMillisecondsSinceEpoch(
-            n * 1000,
-            isUtc: true,
-          ).toLocal();
-        }
-      }
-    }
-
-    // ISO
-    final iso = DateTime.tryParse(s0);
-    if (iso != null) return iso.isUtc ? iso.toLocal() : iso;
-
-    // dd-MM-yyyy, dd/MM/yyyy, dd-MM, yyyy-MM-dd, etc.
-    final s = s0.replaceAll('/', '-').replaceAll('.', '-');
-    final parts = s.split('-').where((e) => e.trim().isNotEmpty).toList();
-
-    if (parts.length >= 3) {
-      if (parts[0].length == 4) {
-        final y = int.tryParse(parts[0]) ?? 0;
-        final mm = int.tryParse(parts[1]) ?? 0;
-        final dd = int.tryParse(parts[2]) ?? 0;
-        if (y > 0 && mm > 0 && dd > 0) return DateTime(y, mm, dd);
-      } else {
-        final dd = int.tryParse(parts[0]) ?? 0;
-        final mm = int.tryParse(parts[1]) ?? 0;
-        int y = int.tryParse(parts[2]) ?? 0;
-        if (y > 0 && y < 100) y += 2000;
-        if (y > 0 && mm > 0 && dd > 0) return DateTime(y, mm, dd);
-      }
-    }
-
-    if (parts.length == 2) {
-      final now = DateTime.now();
-      final dd = int.tryParse(parts[0]) ?? 0;
-      final mm = int.tryParse(parts[1]) ?? 0;
-      if (mm > 0 && dd > 0) return DateTime(now.year, mm, dd);
-    }
-
-    final nums = RegExp(r'\d+').allMatches(s0).map((m) => m.group(0)!).toList();
-    if (nums.length >= 3 && nums[0].length == 4) {
-      final y = int.tryParse(nums[0]) ?? 0;
-      final mm = int.tryParse(nums[1]) ?? 0;
-      final dd = int.tryParse(nums[2]) ?? 0;
-      if (y > 0 && mm > 0 && dd > 0) return DateTime(y, mm, dd);
-    } else if (nums.length >= 2) {
-      final now = DateTime.now();
-      final dd = int.tryParse(nums[0]) ?? 0;
-      final mm = int.tryParse(nums[1]) ?? 0;
-      if (mm > 0 && dd > 0) return DateTime(now.year, mm, dd);
-    }
-
-    return null;
+    // API gives "2010-10-11T06:30:00" -> parse directly
+    final dt = DateTime.tryParse(s);
+    return dt;
   }
 
   bool _isLeap(int y) {
@@ -399,6 +180,7 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
 
   bool _matchesMonthDay(DateTime? dt, DateTime on) {
     if (dt == null) return false;
+    // special rule for Feb 29
     if (dt.month == 2 && dt.day == 29) {
       return on.month == 2 &&
           (on.day == 29 || (!_isLeap(on.year) && on.day == 28));
@@ -434,13 +216,12 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
     );
     if (picked != null) {
       setState(() => _selectedDate = picked);
-      _applyDateFilter();
+      _filterBySelectedDate();
     }
   }
 
-  // -----------------------------
-  // Navigation helpers
-  // -----------------------------
+  // ---------------- Navigation helpers ----------------
+
   void _navigateToDashboard() {
     Navigator.pushReplacement(
       context,
@@ -483,6 +264,8 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
     );
   }
 
+  // ---------------- Build ----------------
+
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
@@ -491,7 +274,7 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F9FC),
       body: RefreshIndicator(
-        onRefresh: _refreshFromApi, // manual refresh updates local cache
+        onRefresh: _refreshFromApi,
         child: CustomScrollView(
           slivers: [
             SliverAppBar(
@@ -589,7 +372,7 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
                           TextButton(
                             onPressed: () {
                               setState(() => _selectedDate = DateTime.now());
-                              _applyDateFilter();
+                              _filterBySelectedDate();
                             },
                             child: const Text('Today'),
                           ),
@@ -607,13 +390,13 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
                 padding: EdgeInsets.symmetric(horizontal: padding),
                 child: Builder(
                   builder: (_) {
-                    if (_isLoading && _enriched.isEmpty) {
+                    if (_isLoading && _all.isEmpty) {
                       return SizedBox(
                         height: MediaQuery.of(context).size.height * 0.5,
                         child: const Center(child: CircularProgressIndicator()),
                       );
                     }
-                    if (_error != null && _enriched.isEmpty) {
+                    if (_error != null && _all.isEmpty) {
                       return SizedBox(
                         height: MediaQuery.of(context).size.height * 0.5,
                         child: Center(
@@ -652,12 +435,11 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
                             subtitle: e.anniversary != null
                                 ? '💍 ${_formatDate(e.anniversary!, includeYear: false)}'
                                 : null,
-                            avatarUrlOverride: e.avatarUrl,
                             onTap: () {
                               Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (_) =>
-                                      PosterSharePage(customer: e.customer),
+                                      PosterSharePage(customer: e.customer, shareMessage: '',),
                                 ),
                               );
                             },
@@ -773,11 +555,10 @@ class _AnniversaryPageState extends State<AnniversaryPage> {
 class _CustomerWithAnniv {
   final model.Customer customer;
   final DateTime? anniversary;
-  final String? avatarUrl;
+  final String? avatarUrl; // not used but kept for compatibility
   const _CustomerWithAnniv({
     required this.customer,
-    required this.anniversary,
-    this.avatarUrl,
+    required this.anniversary, this.avatarUrl,
   });
 }
 
@@ -823,7 +604,8 @@ class EventCustomerCard extends StatelessWidget {
     } catch (_) {}
     try {
       final m = c.toMap();
-      final p = (m['PhoneNumber'] ?? m['phone'] ?? m['Phone'] ?? '').toString();
+      final p = (m['PhoneNumber'] ?? m['phone'] ?? m['Phone'] ?? '')
+          .toString();
       return p;
     } catch (_) {}
     return '';
@@ -877,8 +659,8 @@ class EventCustomerCard extends StatelessWidget {
                       (customer.surname.isNotEmpty
                               ? customer.surname[0]
                               : customer.name.isNotEmpty
-                              ? customer.name[0]
-                              : '?')
+                                  ? customer.name[0]
+                                  : '?')
                           .toUpperCase(),
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
@@ -914,7 +696,10 @@ class EventCustomerCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     _displayPhone(customer),
-                    style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.grey.shade700,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (subtitle != null) ...[
@@ -940,8 +725,7 @@ class EventCustomerCard extends StatelessWidget {
 
 // Simple two-button switch bar used by both pages
 class _EventSwitchBar extends StatelessWidget {
-  final bool
-  showAnniversaries; // true => Anniversaries selected, false => Birthdays selected
+  final bool showAnniversaries; // true => Anniversaries selected
   final VoidCallback onBirthdaysTap;
   final VoidCallback onAnniversariesTap;
 

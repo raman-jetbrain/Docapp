@@ -8,25 +8,43 @@ class Customer {
   final String phone;
   final String email;
   final String address;
-  final String dob;      // UI-friendly DOB text (not ISO) for your current screens
+  /// UI-friendly DOB text (raw string from API; parsing/formatting is done in UI).
+  final String dob;
   final String gender;
 
   // Extras
   final List<Map<String, String>> customEntries;
-  final String? others;  // may contain data URL: data:image/png;base64,....
-  final String? photo;   // local photo path (if any)
+  /// May contain data URL: data:image/png;base64,xxxx
+  final String? others;
+  /// Local photo path (if any)
+  final String? photo;
 
   // Image handling
-  final Uint8List? imageBytes; // in-memory bytes for immediate UI
-  final String? imageB64;      // base64 persisted in storage
+  /// In-memory bytes for immediate UI
+  final Uint8List? imageBytes;
+  /// Base64 persisted in storage
+  final String? imageB64;
 
   // IDs
-  final String? id;       // optional unified id (string), may mirror serverId
-  final String? serverId; // server-side ID (string)
-  final int? fileId;      // FileId from server (int)
-  final int? localId;     // local auto-increment id (for caching only)
+  /// Unified id (string), may mirror serverId / CustomerDataMId
+  final String? id;
+  /// Server-side ID (string)
+  final String? serverId;
+  /// FileId from server (int)
+  final int? fileId;
+  /// Local auto-increment id (for caching only)
+  final int? localId;
+  /// ParentCustomerDataId from API (non-null indicates this record is a child)
+  final int? parentCustomerDataId;
+
+  // Marriage
+  /// "Married", "Single", etc.
+  final String? maritalStatus;
+  /// e.g. "2010-10-11T06:30:00"
+  final String? marriedDate;
 
   Customer({
+    // core
     required this.name,
     required this.surname,
     required this.phone,
@@ -35,14 +53,21 @@ class Customer {
     required this.dob,
     required this.gender,
     required this.customEntries,
+    // extras
     this.others,
     this.photo,
+    // image
     this.imageBytes,
     this.imageB64,
+    // ids
     this.id,
     this.serverId,
     this.fileId,
     this.localId,
+    this.parentCustomerDataId,
+    // marriage
+    this.maritalStatus,
+    this.marriedDate,
   });
 
   // -------- Helpers --------
@@ -60,10 +85,18 @@ class Customer {
     return int.tryParse(v.toString());
   }
 
+  /// Safer base64 decode for image fields
   static Uint8List? _decodeB64Image(dynamic v) {
     if (v == null) return null;
     var s = v.toString().trim();
     if (s.isEmpty) return null;
+
+    // Skip common placeholder values
+    final lower = s.toLowerCase();
+    if (lower == 'string' || lower == 'null' || lower == 'undefined') {
+      return null;
+    }
+    if (s.startsWith('<base64:')) return null;
 
     // Allow data URLs: data:image/png;base64,xxxx
     final commaIndex = s.indexOf(',');
@@ -85,7 +118,9 @@ class Customer {
     if (v is List) {
       return v.map<Map<String, String>>((e) {
         if (e is Map) {
-          return e.map((k, val) => MapEntry(k.toString(), val?.toString() ?? ''));
+          return e.map(
+            (k, val) => MapEntry(k.toString(), val?.toString() ?? ''),
+          );
         }
         return <String, String>{};
       }).toList();
@@ -96,82 +131,178 @@ class Customer {
   // -------- Mapping --------
 
   factory Customer.fromMap(Map<String, dynamic> m) {
-    // Resolve IDs
+    // ----- IDs -----
     final String? idStr = _stringOrNull(
       m['id'] ??
-      m['Id'] ??
-      m['ID'] ??
-      m['CustomerId'] ??
-      m['CustomerID'] ??
-      m['CustomerDataMId'] ??
-      m['CustomerDataMID'] ??
-      m['CustomerDataId'] ??
-      m['CustomerDataID'],
+          m['Id'] ??
+          m['ID'] ??
+          m['CustomerId'] ??
+          m['CustomerID'] ??
+          m['CustomerDataMId'] ??
+          m['CustomerDataMID'] ??
+          m['CustomerDataId'] ??
+          m['CustomerDataID'],
     );
 
     final String? serverId = _stringOrNull(
-      m['serverId'] ??
-      m['ServerId'] ??
-      m['ServerID'] ??
-      idStr
+      m['serverId'] ?? m['ServerId'] ?? m['ServerID'] ?? idStr,
     );
 
-    // Resolve FileId (if present)
+    // Resolve FileId (if present, including from nested HttpFileData)
     final dynamic httpFile = m['HttpFileData'] ?? m['httpFileData'];
     final int? fileId = _toInt(
       m['fileId'] ??
-      m['FileId'] ??
-      (httpFile is Map ? (httpFile['Id'] ?? httpFile['FileId']) : null),
+          m['FileId'] ??
+          (httpFile is Map ? (httpFile['Id'] ?? httpFile['FileId']) : null),
     );
 
-    // Resolve image bytes from multiple possible sources
+    // ParentCustomerDataId (indicates this record is a child when non-null)
+    final int? parentId = _toInt(
+      m['parentCustomerDataId'] ??
+          m['ParentCustomerDataId'] ??
+          m['ParentId'] ??
+          m['parentId'],
+    );
+
+    // Marriage
+    final String? maritalStatus = _stringOrNull(
+      m['maritalStatus'] ??
+          m['MaritalStatus'] ?? // correct spelling
+          m['MartialStatus'],   // API typo
+    );
+    final String? marriedDate = _stringOrNull(
+      m['marriedDate'] ?? m['MarriedDate'],
+    );
+
+    // ----- Image bytes / base64 -----
     Uint8List? bytes;
-    // 1) direct imageBytes (bytes or base64 string)
+    String? imageB64;
+
+    // 1) direct imageBytes (may be bytes or base64 string)
     final dynamic imgField = m['imageBytes'];
     if (imgField is Uint8List && imgField.isNotEmpty) {
       bytes = imgField;
     } else if (imgField is String && imgField.isNotEmpty) {
-      bytes = _decodeB64Image(imgField);
+      final b = _decodeB64Image(imgField);
+      if (b != null && b.isNotEmpty) bytes = b;
     }
 
-    // 2) imageB64 (base64 string)
-    String? imageB64 = _stringOrNull(m['imageB64']);
+    // 2) imageB64 (base64 string, common for persistence)
+    imageB64 = _stringOrNull(m['imageB64']);
     if (bytes == null && imageB64 != null) {
-      bytes = _decodeB64Image(imageB64);
+      final b = _decodeB64Image(imageB64);
+      if (b != null && b.isNotEmpty) bytes = b;
     }
 
-    // 3) Others may contain a data URL
+    // 3) Others may contain a data URL from API
     final String? others = _stringOrNull(m['others'] ?? m['Others']);
-    if (bytes == null && others != null && others.startsWith('data:image')) {
-      bytes = _decodeB64Image(others);
+    if (bytes == null &&
+        others != null &&
+        others.toLowerCase().startsWith('data:image')) {
+      final b = _decodeB64Image(others);
+      if (b != null && b.isNotEmpty) bytes = b;
     }
 
-    // If we decoded bytes but had no imageB64, create one for persistence
-    imageB64 ??= (bytes != null && bytes.isNotEmpty) ? base64Encode(bytes) : null;
+    // If we decoded bytes but had no base64, create one for persistence
+    imageB64 ??=
+        (bytes != null && bytes.isNotEmpty) ? base64Encode(bytes) : null;
+
+    // ----- Core fields -----
+    final String name =
+        _stringOrNull(m['name'] ?? m['Name'] ?? m['firstName'] ?? m['FirstName']) ??
+            '';
+    final String surname =
+        _stringOrNull(m['surname'] ?? m['Surname'] ?? m['lastName'] ?? m['LastName']) ??
+            '';
+    final String phone = _stringOrNull(
+          m['phone'] ??
+              m['Phone'] ??
+              m['phoneNumber'] ??
+              m['PhoneNumber'] ??
+              m['mobile'] ??
+              m['Mobile'] ??
+              m['mobileNumber'] ??
+              m['MobileNumber'],
+        ) ??
+        '';
+
+    final String email = _stringOrNull(
+          m['email'] ??
+              m['Email'] ??
+              m['EmailId'] ??
+              m['EmailID'] ??
+              m['emailId'] ??
+              m['emailID'],
+        ) ??
+        '';
+
+    final String address =
+        _stringOrNull(m['address'] ?? m['Address'] ?? m['addr'] ?? m['Addr']) ??
+            '';
+
+    // DOB: normalize from many possible API keys into single `dob` field
+    final String dob = _stringOrNull(
+          m['dob'] ??
+              m['DOB'] ??
+              m['SDOB'] ??
+              m['dateOfBirth'] ??
+              m['DateOfBirth'] ??
+              m['birthDate'] ??
+              m['BirthDate'] ??
+              m['birthday'] ??
+              m['Birthday'],
+        ) ??
+        '';
+
+    final String gender = _stringOrNull(
+          m['gender'] ?? m['Gender'] ?? m['sex'] ?? m['Sex'],
+        ) ??
+        '';
+
+    // Custom entries: accept multiple key variants
+    final List<Map<String, String>> customEntries = _coerceCustomEntries(
+      m['customEntries'] ??
+          m['CustomEntries'] ??
+          m['custom_fields'] ??
+          m['CustomFields'],
+    );
+
+    final String? photo = _stringOrNull(m['photo'] ?? m['Photo']);
 
     return Customer(
-      name: _stringOrNull(m['name'] ?? m['Name']) ?? '',
-      surname: _stringOrNull(m['surname'] ?? m['Surname']) ?? '',
-      phone: _stringOrNull(m['phone'] ?? m['Phone'] ?? m['PhoneNumber']) ?? '',
-      email: _stringOrNull(m['email'] ?? m['Email'] ?? m['EmailId']) ?? '',
-      address: _stringOrNull(m['address'] ?? m['Address']) ?? '',
-      dob: _stringOrNull(m['dob'] ?? m['DOB'] ?? m['SDOB']) ?? '',
-      gender: _stringOrNull(m['gender'] ?? m['Gender']) ?? '',
-      customEntries: _coerceCustomEntries(m['customEntries']),
+      // core
+      name: name,
+      surname: surname,
+      phone: phone,
+      email: email,
+      address: address,
+      dob: dob,
+      gender: gender,
+      customEntries: customEntries,
+      // extras
       others: others,
-      photo: _stringOrNull(m['photo']),
+      photo: photo,
+      // image
       imageBytes: bytes,
       imageB64: imageB64,
+      // ids
       id: idStr,
       serverId: serverId,
       fileId: fileId,
       localId: _toInt(m['localId']),
+      parentCustomerDataId: parentId,
+      // marriage
+      maritalStatus: maritalStatus,
+      marriedDate: marriedDate,
     );
   }
 
   Map<String, dynamic> toMap() {
     // Prefer to include imageB64 (safe for JSON). Avoid raw imageBytes in JSON.
-    final String? outB64 = imageB64 ?? (imageBytes != null && imageBytes!.isNotEmpty ? base64Encode(imageBytes!) : null);
+    final String? outB64 = imageB64 ??
+        (imageBytes != null && imageBytes!.isNotEmpty
+            ? base64Encode(imageBytes!)
+            : null);
 
     return <String, dynamic>{
       // IDs
@@ -179,6 +310,12 @@ class Customer {
       if (serverId != null) 'serverId': serverId,
       if (fileId != null) 'fileId': fileId,
       if (localId != null) 'localId': localId,
+      if (parentCustomerDataId != null)
+        'parentCustomerDataId': parentCustomerDataId,
+
+      // Marriage
+      if (maritalStatus != null) 'maritalStatus': maritalStatus,
+      if (marriedDate != null) 'marriedDate': marriedDate,
 
       // Core
       'name': name,
@@ -216,6 +353,9 @@ class Customer {
     String? serverId,
     int? fileId,
     int? localId,
+    int? parentCustomerDataId,
+    String? maritalStatus,
+    String? marriedDate,
   }) {
     return Customer(
       name: name ?? this.name,
@@ -234,6 +374,10 @@ class Customer {
       serverId: serverId ?? this.serverId,
       fileId: fileId ?? this.fileId,
       localId: localId ?? this.localId,
+      parentCustomerDataId:
+          parentCustomerDataId ?? this.parentCustomerDataId,
+      maritalStatus: maritalStatus ?? this.maritalStatus,
+      marriedDate: marriedDate ?? this.marriedDate,
     );
   }
 }

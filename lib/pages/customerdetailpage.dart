@@ -1,20 +1,29 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:docapp/api/customerBus.dart';
+import 'package:docapp/childeditpage.dart';
 import 'package:docapp/descriptionpage.dart';
 import 'package:docapp/documentspage.dart';
 import 'package:docapp/familydetailspage.dart';
 import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/utils/detailsprofile.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CustomerDetailPage extends StatefulWidget {
   final model.Customer customer;
-  const CustomerDetailPage({super.key, required this.customer});
+
+  /// If null => this is a parent.
+  /// If not null => this is a child (this is the ParentCustomerDataId).
+  final int? parentCustomerDataId;
+
+  const CustomerDetailPage({
+    super.key,
+    required this.customer,
+    this.parentCustomerDataId, // <‑‑ you can pass ParentCustomerDataId here
+  });
 
   @override
   State<CustomerDetailPage> createState() => _CustomerDetailPageState();
@@ -24,6 +33,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
   final TextEditingController _notesCtrl = TextEditingController();
   String _savedNotes = '';
   String? _photoPath;
+
+  bool get _isParent => widget.parentCustomerDataId == null;
 
   @override
   void initState() {
@@ -140,7 +151,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
       if (others is String && others.isNotEmpty) {
         if (others.startsWith('data:image')) {
           bytes = _decodeDataUrl(others);
-          ext = _extFromDataUrl(others) ?? (bytes != null ? _guessImageExt(bytes) : 'jpg');
+          ext = _extFromDataUrl(others) ??
+              (bytes != null ? _guessImageExt(bytes) : 'jpg');
         } else if (others.startsWith('http://') ||
             others.startsWith('https://')) {
           bytes = await _downloadImage(others);
@@ -156,7 +168,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
 
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final safePhone = widget.customer.phone.replaceAll(RegExp(r'[^0-9A-Za-z]+'), '_');
+      final safePhone = widget.customer.phone
+          .replaceAll(RegExp(r'[^0-9A-Za-z]+'), '_');
       final filePath =
           '${dir.path}/cust_${safePhone}_${DateTime.now().millisecondsSinceEpoch}.${ext ?? 'jpg'}';
       final file = File(filePath);
@@ -331,7 +344,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                 shape: BoxShape.circle,
               ),
               child: IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black, size: 20),
+                icon: const Icon(Icons.arrow_back_ios_new,
+                    color: Colors.black, size: 20),
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ),
@@ -343,7 +357,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                   shape: BoxShape.circle,
                 ),
                 child: IconButton(
-                  icon: const Icon(Icons.favorite_border, color: Colors.black, size: 24),
+                  icon: const Icon(Icons.favorite_border,
+                      color: Colors.black, size: 24),
                   onPressed: () {},
                 ),
               ),
@@ -449,27 +464,52 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(30), topRight: Radius.circular(30)),
+                      topLeft: Radius.circular(30),
+                      topRight: Radius.circular(30),
+                    ),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 24,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SizedBox(height: 24),
+
+                        // DESCRIPTION CARD (parent vs child)
                         _buildSectionCard(
                           title: 'Description',
                           icon: Icons.info_outline,
                           iconColor: primaryColor,
                           onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => DescriptionPage(customer: _customerForChildren),
-                              ),
-                            );
+                            if (_isParent) {
+                              // Parent -> go to edit customer page
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => DescriptionPage(
+                                    customer: _customerForChildren,
+                                  ),
+                                ),
+                              );
+                            } else {
+                              // Child -> go to edit child page
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => Childeditpage(
+                                    customer: _customerForChildren,
+                                    parentCustomerDataId:
+                                        widget.parentCustomerDataId,
+                                  ),
+                                ),
+                              );
+                            }
                           },
                         ),
+
                         const SizedBox(height: 16),
                         _buildSectionCard(
                           title: 'Documents',
@@ -479,7 +519,9 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => DocumentsPage(customer: _customerForChildren),
+                                builder: (_) => DocumentsPage(
+                                  customer: _customerForChildren,
+                                ),
                               ),
                             );
                           },
@@ -493,7 +535,9 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => FamilyPage(customer: _customerForChildren),
+                                builder: (_) => FamilyPage(
+                                  customer: _customerForChildren,
+                                ),
                               ),
                             );
                           },
@@ -578,7 +622,8 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                   ),
                 ),
               ),
-              const Icon(Icons.arrow_forward_ios, size: 18, color: Colors.grey),
+              const Icon(Icons.arrow_forward_ios,
+                  size: 18, color: Colors.grey),
             ],
           ),
         ),
@@ -614,7 +659,8 @@ class NotesCard extends StatelessWidget {
             : SingleChildScrollView(
                 child: Text(
                   notes,
-                  style: const TextStyle(fontSize: 16, color: Colors.black87),
+                  style:
+                      const TextStyle(fontSize: 16, color: Colors.black87),
                 ),
               ),
       ),
@@ -625,7 +671,10 @@ class NotesCard extends StatelessWidget {
 class _NotesEditorCard extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onSave;
-  const _NotesEditorCard({required this.controller, required this.onSave});
+  const _NotesEditorCard({
+    required this.controller,
+    required this.onSave,
+  });
 
   @override
   State<_NotesEditorCard> createState() => _NotesEditorCardState();
@@ -660,7 +709,8 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24)),
       content: Container(
         width: MediaQuery.of(context).size.width * 0.85,
         height: 400,
@@ -668,7 +718,8 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
         child: Column(
           children: [
             const Text('Edit Notes',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
+                style:
+                    TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
             const SizedBox(height: 16),
             Expanded(
               child: TextField(
@@ -681,8 +732,9 @@ class _NotesEditorCardState extends State<_NotesEditorCard> {
                   filled: true,
                   fillColor: Colors.grey.shade100,
                   border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide.none),
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
             ),

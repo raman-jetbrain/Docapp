@@ -19,7 +19,7 @@ class _DocCard extends StatelessWidget {
   final VoidCallback onShare;
   final VoidCallback? onLongPress;
   final VoidCallback? onDelete;
-  final VoidCallback? onEdit; 
+  final VoidCallback? onEdit;
   final Color borderColor;
   final Color iconColor;
   final bool selected;

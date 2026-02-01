@@ -6,8 +6,10 @@ import 'dart:ui' as ui;
 
 import 'package:docapp/api/customer_api_service.dart';
 import 'package:docapp/model/customer.dart' as model;
+import 'package:docapp/utils/wish_tracker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -17,7 +19,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 class PosterSharePage extends StatefulWidget {
   final model.Customer customer;
 
-  const PosterSharePage({super.key, required this.customer});
+  /// Caption text to share along with the poster (passed from Birthday/Anniversary page).
+  final String? shareMessage;
+
+  const PosterSharePage({
+    super.key,
+    required this.customer,
+    this.shareMessage,
+  });
 
   @override
   State<PosterSharePage> createState() => _PosterSharePageState();
@@ -36,7 +45,7 @@ class _PosterSharePageState extends State<PosterSharePage> {
   bool _loadingCustomer = false;
   String? _loadError;
 
-  // Only templates now (persisted)
+  // Templates (persisted)
   final List<File> _templates = [];
   int? _selectedIndex;
 
@@ -55,7 +64,7 @@ class _PosterSharePageState extends State<PosterSharePage> {
   ];
   static const List<String> _annivKeys = [
     'anniversary', 'anniversaryDate', 'wedding_anniversary', 'doa', 'dom',
-    'dateOfAnniversary', 'marriageDate'
+    'dateOfAnniversary', 'marriageDate', 'MarriedDate'
   ];
 
   @override
@@ -132,15 +141,28 @@ class _PosterSharePageState extends State<PosterSharePage> {
   }
 
   Future<void> _loadTemplates() async {
+    await _store.ensureDefaultsLoaded();
     final list = await _store.listTemplates();
     setState(() {
       _templates
         ..clear()
         ..addAll(list);
-      if (_selectedIndex == null && _templates.isNotEmpty) {
+
+      if (_templates.isEmpty) {
+        _selectedIndex = null;
+        return;
+      }
+
+      // Prefer a default template matching today's event type for this customer
+      final type = _todayEventTypeForCustomer();
+      if (type != null) {
+        final tag = type == 'birthday' ? 'bday' : 'anniv';
+        final idx = _templates.indexWhere(
+          (f) => p.basename(f.path).toLowerCase().contains(tag),
+        );
+        _selectedIndex = idx != -1 ? idx : 0;
+      } else {
         _selectedIndex = 0;
-      } else if (_selectedIndex != null && _selectedIndex! >= _templates.length) {
-        _selectedIndex = _templates.isNotEmpty ? _templates.length - 1 : null;
       }
     });
   }
@@ -288,34 +310,59 @@ class _PosterSharePageState extends State<PosterSharePage> {
     }
   }
 
-  // Build share caption including today's counts
-  String _buildShareCaption({
-    required int birthdayCount,
-    required int anniversaryCount,
-  }) {
-    return 'Maruthi Insure Care wishes you a wonderful year ahead filled with happiness, health, and success.\n'
-           'Enjoy your special day! 🎈\n';
+  // Caption used for WhatsApp / any share target
+  String _buildShareCaption() {
+    return widget.shareMessage ??
+        "On your special day, Maruthi Insure Care wishes you happiness, "
+        "good health, and continued success. Your support means a lot to us";
   }
 
-  // Share via Share Plus with caption including counts
+  // Detect today's event type for this customer
+  String? _todayEventTypeForCustomer() {
+    final dob = _firstDateByKeys(_customer.toMap(), _dobKeys);
+    final isBday = _isTodayMonthDay(dob);
+
+    final anniv = _firstDateByKeys(_customer.toMap(), _annivKeys);
+    final isAnniv = _isTodayMonthDay(anniv);
+
+    if (isBday && !isAnniv) return 'birthday';
+    if (isAnniv && !isBday) return 'anniversary';
+    if (isBday && isAnniv) return 'birthday';
+    return null;
+  }
+
+  Future<void> _markWishDoneForToday() async {
+    final type = _todayEventTypeForCustomer();
+    final phone = (_customer.phone ?? '').toString().trim();
+    if (type == null || phone.isEmpty) return;
+    await WishTracker.markDone(phone: phone, type: type);
+  }
+
+  // Share via Share Plus with caption (user selects WhatsApp)
   Future<void> _sharePoster() async {
-    final counts = await _loadTodayCounts();
     final file = await _renderPosterToFile();
     if (file == null) return;
 
-    final caption = _buildShareCaption(
-      birthdayCount: counts.birthdays,
-      anniversaryCount: counts.anniversaries,
-    );
+    final caption = _buildShareCaption();
 
     try {
+      // This opens the system share sheet. When the user selects WhatsApp,
+      // WhatsApp will receive this image + caption text.
       await Share.shareXFiles(
         [XFile(file.path, mimeType: 'image/png')],
         text: caption,
         subject: 'Warm wishes from Maruthi Insure Care',
       );
+
+      await _markWishDoneForToday();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Shared. Marked as done for today.')),
+      );
     } catch (e) {
       debugPrint('share error: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not share: $e')),
       );
@@ -324,9 +371,21 @@ class _PosterSharePageState extends State<PosterSharePage> {
 
   void _openNameColorPicker() {
     final colors = <Color>[
-      Colors.white, Colors.black, const Color(0xFF5D4037), Colors.red, Colors.pink, Colors.purple,
-      Colors.indigo, Colors.blue, Colors.teal, Colors.green, Colors.lime, Colors.orange, Colors.amber,
-      Colors.brown, Colors.grey,
+      Colors.white,
+      Colors.black,
+      const Color(0xFF5D4037),
+      Colors.red,
+      Colors.pink,
+      Colors.purple,
+      Colors.indigo,
+      Colors.blue,
+      Colors.teal,
+      Colors.green,
+      Colors.lime,
+      Colors.orange,
+      Colors.amber,
+      Colors.brown,
+      Colors.grey,
     ];
 
     showModalBottomSheet(
@@ -398,9 +457,9 @@ class _PosterSharePageState extends State<PosterSharePage> {
         backgroundColor: Colors.transparent,
         centerTitle: true,
         leading: const BackButton(color: Colors.white),
-        title: Text(
+        title: const Text(
           '',
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         actions: [
           if (_loadingCustomer)
@@ -408,7 +467,8 @@ class _PosterSharePageState extends State<PosterSharePage> {
               padding: EdgeInsets.symmetric(horizontal: 8.0),
               child: Center(
                 child: SizedBox(
-                  width: 18, height: 18,
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                 ),
               ),
@@ -443,6 +503,14 @@ class _PosterSharePageState extends State<PosterSharePage> {
           ),
         ),
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: _selectedFile != null
+          ? FloatingActionButton.extended(
+              onPressed: _sharePoster,
+              icon: const Icon(Icons.send),
+              label: const Text('Send'),
+            )
+          : null,
       body: SafeArea(
         child: Column(
           children: [
@@ -455,11 +523,18 @@ class _PosterSharePageState extends State<PosterSharePage> {
                   children: [
                     const Icon(Icons.error_outline, color: Colors.red),
                     const SizedBox(width: 8),
-                    Expanded(child: Text(_loadError!, maxLines: 2, overflow: TextOverflow.ellipsis)),
+                    Expanded(
+                      child: Text(
+                        _loadError!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                     TextButton(onPressed: _hydrateCustomerFromApi, child: const Text('Retry')),
                   ],
                 ),
               ),
+
             // Preview canvas
             Expanded(
               child: Container(
@@ -597,7 +672,7 @@ class _PosterSharePageState extends State<PosterSharePage> {
     );
   }
 
-  // === Count helpers (same logic as Dashboard) ===
+  // === Count helpers kept for compatibility (not needed for caption) ===
 
   Future<_Counts> _loadTodayCounts() async {
     try {
@@ -766,7 +841,6 @@ class _Counts {
 }
 
 // Canvas: shows the selected template with the customer block on bottom-left
-// and watermark on bottom-right
 class _PosterCanvas extends StatelessWidget {
   final File templateFile;
   final model.Customer customer;
@@ -803,39 +877,6 @@ class _PosterCanvas extends StatelessWidget {
               width: double.infinity,
               height: double.infinity,
             ),
-
-            // Watermark/Logo at bottom-right
-            Align(
-              alignment: Alignment.bottomRight,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Opacity(
-                  opacity: 0.8,
-                  child: Image.asset(
-                    'assets/icon/docapp.png',
-                    width: math.max(60.0, dim * 0.15),
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        width: 70,
-                        height: 40,
-                        color: Colors.grey.withOpacity(0.5),
-                        child: const Center(
-                          child: Text(
-                            'LOGO',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
-
             // Customer badge at bottom-left
             Align(
               alignment: Alignment.bottomLeft,
@@ -860,7 +901,6 @@ class _PosterCanvas extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 12),
-
                     // Name with a subtle shadow
                     Text(
                       customerDisplayName,
@@ -945,5 +985,38 @@ class _PosterTemplateStore {
     final out = File(p.join(dir.path, name));
     await out.writeAsBytes(pngBytes, flush: true);
     return out;
+  }
+
+  // Copy default assets into templates folder once
+  Future<void> ensureDefaultsLoaded() async {
+    final prefs = await SharedPreferences.getInstance();
+    const flagKey = 'poster_defaults_loaded_v1';
+    if (prefs.getBool(flagKey) == true) return;
+
+    final dir = await _templatesDir();
+
+    final defaults = <Map<String, String>>[
+      {'asset': 'assets/posters/birthday/b1.jpg', 'name': 'default_bday_1.jpg'},
+      {'asset': 'assets/posters/birthday/b2.jpg', 'name': 'default_bday_2.jpg'},
+      {'asset': 'assets/posters/anniversary/a1.jpg', 'name': 'default_anniv_1.jpg'},
+      {'asset': 'assets/posters/anniversary/a2.jpg', 'name': 'default_anniv_2.jpg'},
+    ];
+
+    for (final item in defaults) {
+      try {
+        final data = await rootBundle.load(item['asset']!);
+        final out = File(p.join(dir.path, item['name']!));
+        if (!await out.exists()) {
+          await out.writeAsBytes(
+            data.buffer.asUint8List(),
+            flush: true,
+          );
+        }
+      } catch (e) {
+        debugPrint('Default poster copy failed for ${item['asset']}: $e');
+      }
+    }
+
+    await prefs.setBool(flagKey, true);
   }
 }

@@ -1,28 +1,54 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:pdfx/pdfx.dart';
+
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/model/DocumentsItem.dart' show DocumentItem;
 import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // compute()
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-const int kMaxUploadBytes = 2 * 1024 * 1024; 
-const int kRawBudgetForBase64 = ((kMaxUploadBytes * 3) ~/ 4) - 8 * 1024;
+const int kMaxUploadBytes = 2 * 1024 * 1024;
+const int kRawBudgetForBase64 =
+    ((kMaxUploadBytes * 3) ~/ 4) - 8 * 1024;
 
 const bool kLogHttpDocs = true;
 
+// -------- Session-like storage for last shared document --------
+const String _kLastDocBase64Key = 'last_doc_b64';
+const String _kLastDocMimeKey = 'last_doc_mime';
+const String _kLastDocNameKey = 'last_doc_name';
+const String _kLastDocUrlKey = 'last_doc_url';
+
+class StoredSessionDoc {
+  final Uint8List bytes;
+  final String mime;
+  final String fileName;
+  final String? url;
+
+  const StoredSessionDoc({
+    required this.bytes,
+    required this.mime,
+    required this.fileName,
+    this.url,
+  });
+}
+
+// -------- Logging helpers --------
 String _maskTokenDocs(String? v) {
   if (v == null || v.isEmpty) return '';
-  final s = v.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '').trim();
+  final s =
+      v.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '')
+          .trim();
   if (s.length <= 8) return 'Bearer ****';
   return 'Bearer ${s.substring(0, 4)}****${s.substring(s.length - 4)}';
 }
@@ -45,7 +71,8 @@ dynamic _sanitizeJsonAny(dynamic v) {
     final m = Map<String, dynamic>.from(v);
     if (m.containsKey('FileData')) {
       final fd = m['FileData'];
-      final len = (fd is String) ? fd.length : (fd is List ? fd.length : 0);
+      final len =
+          (fd is String) ? fd.length : (fd is List ? fd.length : 0);
       m['FileData'] = '<omitted $len bytes>';
     }
     m.updateAll((key, value) => _sanitizeJsonAny(value));
@@ -64,13 +91,16 @@ void logDocReq({
 }) {
   if (!kLogHttpDocs) return;
   final h = {...?headers};
-  if (h.containsKey('Authorization')) h['Authorization'] = _maskTokenDocs(h['Authorization']);
+  if (h.containsKey('Authorization')) {
+    h['Authorization'] = _maskTokenDocs(h['Authorization']);
+  }
   debugPrint('[DOC $method] $url');
   debugPrint('[DOC] Headers: ${jsonEncode(h)}');
   if (body != null) {
     final sanitized = _sanitizeJsonBody(body);
     final s = sanitized is String ? sanitized : sanitized.toString();
-    final trimmed = s.length > 2000 ? '${s.substring(0, 2000)}...(${s.length} chars)' : s;
+    final trimmed =
+        s.length > 2000 ? '${s.substring(0, 2000)}...(${s.length} chars)' : s;
     debugPrint('[DOC] Body: $trimmed');
   }
 }
@@ -83,14 +113,16 @@ void logDocRes(http.Response res) {
   debugPrint('[DOC <-] $status $url');
   if (ct.contains('application/json') || ct.contains('text/')) {
     final body = res.body;
-    final trimmed = body.length > 2000 ? '${body.substring(0, 2000)}...(${body.length} chars)' : body;
+    final trimmed =
+        body.length > 2000 ? '${body.substring(0, 2000)}...(${body.length} chars)' : body;
     debugPrint('[DOC] Response body: $trimmed');
   } else {
-    debugPrint('[DOC] Response bytes: ${res.bodyBytes.length} (${ct.isEmpty ? 'unknown content-type' : ct})');
+    debugPrint('[DOC] Response bytes: ${res.bodyBytes.length} '
+        '(${ct.isEmpty ? 'unknown content-type' : ct})');
   }
 }
 
-// ---------------- API helpers ----------------
+// -------- API helpers --------
 String get _apiBaseNormalized {
   var b = ApiConstants.baseUrl.trim();
   if (b.endsWith('/')) b = b.substring(0, b.length - 1);
@@ -111,13 +143,6 @@ String _resolveFileUrl(String fileNameOrUrl) {
   return '$base/$u';
 }
 
-bool _sameHostDocs(String a, String b) {
-  final ua = Uri.tryParse(a);
-  final ub = Uri.tryParse(b);
-  if (ua == null || ub == null) return false;
-  return ua.host.toLowerCase() == ub.host.toLowerCase();
-}
-
 String? _extractServerError(String body) {
   try {
     final decoded = jsonDecode(body);
@@ -130,8 +155,12 @@ String? _extractServerError(String body) {
         for (final entry in errors.entries) {
           final key = entry.key;
           final val = entry.value;
-          if (val is List && val.isNotEmpty) lines.add("$key: ${val.join(', ')}");
-          if (val is String) lines.add("$key: $val");
+          if (val is List && val.isNotEmpty) {
+            lines.add("$key: ${val.join(', ')}");
+          }
+          if (val is String) {
+            lines.add("$key: $val");
+          }
         }
         if (lines.isNotEmpty) return lines.join('\n');
       }
@@ -155,7 +184,7 @@ Map<String, dynamic> _unwrapApiPayload(dynamic raw) {
   return {};
 }
 
-// ---------------- Separate delete flag helpers (requested) ----------------
+// -------- delete flag helpers --------
 bool parseBoolLoose(dynamic v) {
   if (v is bool) return v;
   if (v is num) return v != 0;
@@ -170,7 +199,12 @@ bool parseBoolLoose(dynamic v) {
 bool isDeletedFlag(dynamic source) {
   if (source is Map) {
     final m = Map<String, dynamic>.from(source);
-    final v = m['IsDeleted'] ?? m['isDeleted'] ?? m['IsDelete'] ?? m['isDelete'] ?? m['IdDelete'] ?? m['idDelete'];
+    final v = m['IsDeleted'] ??
+        m['isDeleted'] ??
+        m['IsDelete'] ??
+        m['isDelete'] ??
+        m['IdDelete'] ??
+        m['idDelete'];
     return parseBoolLoose(v);
   }
   return parseBoolLoose(source);
@@ -178,14 +212,15 @@ bool isDeletedFlag(dynamic source) {
 
 // Wrapper that hides the child when deleted
 Widget hideIfDeleted({
-  required dynamic deletedSource, // Map or bool/int/string or the field itself
+  required dynamic deletedSource,
   required Widget child,
 }) {
   return isDeletedFlag(deletedSource) ? const SizedBox.shrink() : child;
 }
 
-// ---------------- Image/base64 off-main-isolate helpers ----------------
-Future<Uint8List?> compressImageToBudgetIsolate(Map<String, dynamic> args) async {
+// -------- Image/base64 off-main-isolate helpers --------
+Future<Uint8List?> compressImageToBudgetIsolate(
+    Map<String, dynamic> args) async {
   final bytes = args['bytes'] as Uint8List;
   final budget = args['budget'] as int;
   final minDim = (args['minDim'] as int?) ?? 640;
@@ -203,7 +238,9 @@ Future<Uint8List?> compressImageToBudgetIsolate(Map<String, dynamic> args) async
 
   while (true) {
     Uint8List out = Uint8List.fromList(
-      preferJpeg ? img.encodeJpg(working, quality: quality) : img.encodePng(working, level: 6),
+      preferJpeg
+          ? img.encodeJpg(working, quality: quality)
+          : img.encodePng(working, level: 6),
     );
     if (out.length <= budget) return out;
 
@@ -236,7 +273,7 @@ Future<Uint8List?> compressImageToBudgetIsolate(Map<String, dynamic> args) async
 
 String base64EncodeIsolate(Uint8List data) => base64Encode(data);
 
-// ---------------- Doc meta (for delete) ----------------
+// -------- Doc meta (for delete) --------
 class _DocMeta {
   final int recordId; // server record id used for update/delete
   final String fileName;
@@ -274,7 +311,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
   // Server meta for delete
   final Map<String, _DocMeta> _docMetaById = {};
 
-  // NEW: delete flag per doc id (for wrapper)
+  // delete flag per doc id (for wrapper)
   final Map<String, bool> _deletedById = {};
 
   String? _selectedId;
@@ -304,7 +341,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
     }
     try {
       final m = widget.customer.toMap();
-      final v = m['Id'] ?? m['id'] ?? m['CustomerDataId'] ?? m['CustomerId'];
+      final v = m['Id'] ??
+          m['id'] ??
+          m['CustomerDataId'] ??
+          m['CustomerId'];
       if (v is int) return v;
       if (v is String) return int.tryParse(v);
     } catch (_) {}
@@ -324,17 +364,19 @@ class _DocumentsPageState extends State<DocumentsPage> {
       final token = await TokenStorage.getToken();
       final headers = <String, String>{
         'Accept': 'application/json',
-        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+        if (token != null && token.isNotEmpty)
+          'Authorization': 'Bearer $token',
       };
-      final uri = Uri.parse('$_apiBaseNormalized/CustomerDataM/GetAsync/$id');
+      final uri =
+          Uri.parse('$_apiBaseNormalized/CustomerDataM/GetAsync/$id');
 
-      // LOG: GET documents
       logDocReq(method: 'GET', url: uri, headers: headers);
       final res = await http.get(uri, headers: headers);
       logDocRes(res);
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
-        final msg = _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
+        final msg =
+            _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
         _snack('Fetch failed: $msg');
         return;
       }
@@ -346,7 +388,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
         docs = payload['Documents'] as List;
       } else if (payload['documents'] is List) {
         docs = payload['documents'] as List;
-      } else if (payload['Data'] is Map && (payload['Data']['Documents'] is List)) {
+      } else if (payload['Data'] is Map &&
+          (payload['Data']['Documents'] is List)) {
         docs = payload['Data']['Documents'] as List;
       }
 
@@ -358,26 +401,36 @@ class _DocumentsPageState extends State<DocumentsPage> {
         if (e is! Map) continue;
         final m = Map<String, dynamic>.from(e);
 
-        // read deleted flag (supports many key variants)
-        final del = _asBool(m['IsDeleted'] ?? m['isDeleted'] ?? m['IsDelete'] ?? m['isDelete'] ?? m['IdDelete'] ?? m['idDelete']);
+        final del = _asBool(
+          m['IsDeleted'] ??
+              m['isDeleted'] ??
+              m['IsDelete'] ??
+              m['isDelete'] ??
+              m['IdDelete'] ??
+              m['idDelete'],
+        );
 
         final idStrRaw = (m['Id'] ?? m['id'] ?? '').toString();
         final recId = int.tryParse(idStrRaw) ?? 0;
 
-        final remarks = (m['Remarks'] ?? m['remarks'] ?? '').toString().trim();
-        final fileName = (m['FileName'] ?? m['fileName'] ?? '').toString().trim();
+        final remarks =
+            (m['Remarks'] ?? m['remarks'] ?? '').toString().trim();
+        final fileName =
+            (m['FileName'] ?? m['fileName'] ?? '').toString().trim();
         final fileType = (m['FileType'] ?? m['fileType'] ?? '').toString();
-        final urlRaw = (m['Url'] ?? m['url'] ?? fileName).toString();
+        final urlRaw =
+            (m['Url'] ?? m['url'] ?? fileName).toString();
         final url = urlRaw.isNotEmpty ? _resolveFileUrl(urlRaw) : null;
 
-        String itemTitle = remarks.isNotEmpty ? remarks : (fileName.isNotEmpty ? fileName : 'Document');
+        String itemTitle =
+            remarks.isNotEmpty ? remarks : (fileName.isNotEmpty ? fileName : 'Document');
 
-        final docId = idStrRaw.isEmpty ? 'srv_${DateTime.now().microsecondsSinceEpoch}' : idStrRaw;
+        final docId = idStrRaw.isEmpty
+            ? 'srv_${DateTime.now().microsecondsSinceEpoch}'
+            : idStrRaw;
 
-        // store delete flag for wrapper
         _deletedById[docId] = del;
 
-        // Filter out deleted items (primary filter)
         if (del) continue;
 
         mapped.add(
@@ -394,10 +447,18 @@ class _DocumentsPageState extends State<DocumentsPage> {
           recordId: recId,
           fileName: fileName.isNotEmpty
               ? fileName
-              : (url != null ? p.basename(Uri.parse(url).path) : 'doc_$docId'),
+              : (url != null
+                  ? p.basename(Uri.parse(url).path)
+                  : 'doc_$docId'),
           fileType: fileType.isNotEmpty
               ? fileType
-              : _guessMimeFromExt(fileName.isNotEmpty ? p.extension(fileName) : (url != null ? p.extension(Uri.parse(url).path) : '')),
+              : _guessMimeFromExt(
+                  fileName.isNotEmpty
+                      ? p.extension(fileName)
+                      : (url != null
+                          ? p.extension(Uri.parse(url).path)
+                          : ''),
+                ),
           remarks: remarks.isNotEmpty ? remarks : itemTitle,
           url: url,
         );
@@ -425,14 +486,18 @@ class _DocumentsPageState extends State<DocumentsPage> {
     setState(() {
       _pending.insert(
         0,
-        DocumentItem(id: DateTime.now().microsecondsSinceEpoch.toString(), title: t),
+        DocumentItem(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          title: t,
+        ),
       );
     });
     _typeCtrl.clear();
   }
 
   // ------------- Blocking progress dialog wrapper -------------
-  Future<T> _runBlocking<T>(String message, Future<T> Function() task) async {
+  Future<T> _runBlocking<T>(
+      String message, Future<T> Function() task) async {
     BuildContext? dialogCtx;
     showDialog(
       context: context,
@@ -445,7 +510,11 @@ class _DocumentsPageState extends State<DocumentsPage> {
           child: AlertDialog(
             content: Row(
               children: [
-                const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
                 const SizedBox(width: 16),
                 Expanded(child: Text(message)),
               ],
@@ -457,13 +526,15 @@ class _DocumentsPageState extends State<DocumentsPage> {
     try {
       return await task();
     } finally {
-      if (dialogCtx != null && Navigator.of(dialogCtx!).canPop()) {
+      if (dialogCtx != null &&
+          Navigator.of(dialogCtx!).canPop()) {
         Navigator.of(dialogCtx!).pop();
       }
     }
   }
 
-  Future<Uint8List?> _compressImageToUnderLimit(Uint8List input) {
+  Future<Uint8List?> _compressImageToUnderLimit(
+      Uint8List input) {
     return compute(compressImageToBudgetIsolate, {
       'bytes': input,
       'budget': kRawBudgetForBase64,
@@ -472,18 +543,40 @@ class _DocumentsPageState extends State<DocumentsPage> {
     });
   }
 
-  Future<String> _base64InBackground(Uint8List bytes) => compute(base64EncodeIsolate, bytes);
+  Future<String> _base64InBackground(Uint8List bytes) =>
+      compute(base64EncodeIsolate, bytes);
 
   // ------------- File signature helpers (basic) -------------
   String _extFromMagic(Uint8List data) {
     if (data.length >= 4) {
-      if (data[0] == 0x25 && data[1] == 0x50 && data[2] == 0x44 && data[3] == 0x46) return '.pdf';
-      if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return '.png';
+      if (data[0] == 0x25 &&
+          data[1] == 0x50 &&
+          data[2] == 0x44 &&
+          data[3] == 0x46) {
+        return '.pdf';
+      }
+      if (data[0] == 0x89 &&
+          data[1] == 0x50 &&
+          data[2] == 0x4E &&
+          data[3] == 0x47) {
+        return '.png';
+      }
       if (data[0] == 0xFF && data[1] == 0xD8) return '.jpg';
-      if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x38) return '.gif';
+      if (data[0] == 0x47 &&
+          data[1] == 0x49 &&
+          data[2] == 0x46 &&
+          data[3] == 0x38) {
+        return '.gif';
+      }
       if (data.length >= 12 &&
-          data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
-          data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50) {
+          data[0] == 0x52 &&
+          data[1] == 0x49 &&
+          data[2] == 0x46 &&
+          data[3] == 0x46 &&
+          data[8] == 0x57 &&
+          data[9] == 0x45 &&
+          data[10] == 0x42 &&
+          data[11] == 0x50) {
         return '.webp';
       }
       if (data[0] == 0x50 && data[1] == 0x4B) return '.zip';
@@ -532,7 +625,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
       );
       if (!confirmed) return;
 
-      final optimized = await _runBlocking<Uint8List?>('Optimizing image...', () => _compressImageToUnderLimit(data));
+      final optimized = await _runBlocking<Uint8List?>(
+          'Optimizing image...', () => _compressImageToUnderLimit(data));
       if (optimized == null || optimized.isEmpty) {
         _snack('Image too large or unsupported. Pick a smaller image.');
         return;
@@ -541,7 +635,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
       await _uploadToServer(
         remarks: d.title,
         bytes: optimized,
-        fileName: 'doc_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        fileName:
+            'doc_${DateTime.now().millisecondsSinceEpoch}.jpg',
         mime: 'image/jpeg',
         pending: d,
       );
@@ -562,8 +657,11 @@ class _DocumentsPageState extends State<DocumentsPage> {
       await _uploadToServer(
         remarks: d.title,
         bytes: data,
-        fileName: ext.isNotEmpty ? name : 'file_${DateTime.now().millisecondsSinceEpoch}.bin',
-        mime: _guessMimeFromExt(ext.isNotEmpty ? ext : '.bin'),
+        fileName: ext.isNotEmpty
+            ? name
+            : 'file_${DateTime.now().millisecondsSinceEpoch}.bin',
+        mime: _guessMimeFromExt(
+            ext.isNotEmpty ? ext : '.bin'),
         pending: d,
       );
     }
@@ -591,7 +689,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
       final headers = <String, String>{
         'Content-Type': 'application/json; charset=utf-8',
         'Accept': 'application/json',
-        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+        if (token != null && token.isNotEmpty)
+          'Authorization': 'Bearer $token',
       };
 
       await _runBlocking('Uploading...', () async {
@@ -607,16 +706,22 @@ class _DocumentsPageState extends State<DocumentsPage> {
           "CustomerDataId": cid,
         };
 
-        final url = Uri.parse('$_apiBaseNormalized/CustomerDataM/FileRecordAddAsync');
+        final url = Uri.parse(
+            '$_apiBaseNormalized/CustomerDataM/FileRecordAddAsync');
 
-        // LOG: POST upload (sanitized)
         final bodyStr = jsonEncode(payload);
-        logDocReq(method: 'POST', url: url, headers: headers, body: bodyStr);
-        final res = await http.post(url, headers: headers, body: bodyStr);
+        logDocReq(
+            method: 'POST',
+            url: url,
+            headers: headers,
+            body: bodyStr);
+        final res =
+            await http.post(url, headers: headers, body: bodyStr);
         logDocRes(res);
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          final msg = _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
+          final msg =
+              _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
           throw Exception(msg);
         }
       });
@@ -649,8 +754,11 @@ class _DocumentsPageState extends State<DocumentsPage> {
     }
 
     final fileName = meta?.fileName ??
-        (d.remoteUrl != null ? p.basename(Uri.parse(d.remoteUrl!).path) : 'doc_${d.id}');
-    final fileType = meta?.fileType ?? (d.mimeType ?? _guessMimeFromExt(p.extension(fileName)));
+        (d.remoteUrl != null
+            ? p.basename(Uri.parse(d.remoteUrl!).path)
+            : 'doc_${d.id}');
+    final fileType = meta?.fileType ??
+        (d.mimeType ?? _guessMimeFromExt(p.extension(fileName)));
     final remarks = meta?.remarks ?? d.title;
 
     try {
@@ -658,11 +766,11 @@ class _DocumentsPageState extends State<DocumentsPage> {
       final headers = <String, String>{
         'Accept': 'application/json',
         'Content-Type': 'application/json',
-        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+        if (token != null && token.isNotEmpty)
+          'Authorization': 'Bearer $token',
       };
 
       await _runBlocking('Deleting...', () async {
-        // Do NOT send FileData on delete
         final payload = {
           "Id": recId,
           "IsModified": true,
@@ -673,22 +781,27 @@ class _DocumentsPageState extends State<DocumentsPage> {
           "CustomerDataId": cid,
         };
 
-        final url = Uri.parse('$_apiBaseNormalized/CustomerDataM/FileRecordUpdateAsync');
+        final url = Uri.parse(
+            '$_apiBaseNormalized/CustomerDataM/FileRecordUpdateAsync');
 
-        // LOG: POST delete (sanitized)
         final bodyStr = jsonEncode(payload);
-        logDocReq(method: 'POST', url: url, headers: headers, body: bodyStr);
-        final res = await http.post(url, headers: headers, body: bodyStr);
+        logDocReq(
+            method: 'POST',
+            url: url,
+            headers: headers,
+            body: bodyStr);
+        final res =
+            await http.post(url, headers: headers, body: bodyStr);
         logDocRes(res);
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          final msg = _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
+          final msg =
+              _extractServerError(res.body) ?? 'HTTP ${res.statusCode}';
           throw Exception(msg);
         }
       });
 
       if (!mounted) return;
-      // Mark as deleted and optimistically remove
       _deletedById[d.id] = true;
       setState(() {
         _serverDocs.removeWhere((x) => x.id == d.id);
@@ -703,8 +816,12 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   String _fmtSize(int bytes) {
     if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+    }
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
@@ -748,21 +865,41 @@ class _DocumentsPageState extends State<DocumentsPage> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.insert_drive_file_rounded, size: 48, color: Colors.black54),
+                        const Icon(
+                          Icons.insert_drive_file_rounded,
+                          size: 48,
+                          color: Colors.black54,
+                        ),
                         const SizedBox(height: 8),
-                        Text(fileName, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                        Text(
+                          fileName,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ],
                     ),
                   ),
                 const SizedBox(height: 10),
-                Text(sizeStr, style: const TextStyle(color: Colors.black54)),
+                Text(
+                  sizeStr,
+                  style: const TextStyle(color: Colors.black54),
+                ),
               ],
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
               ElevatedButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                style: ElevatedButton.styleFrom(backgroundColor: brandBlue, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: brandBlue,
+                  foregroundColor: Colors.white,
+                ),
                 child: const Text('Upload'),
               ),
             ],
@@ -773,18 +910,21 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   // ------------- Open / Download / Share -------------
   Future<String?> _ensureLocalFile(DocumentItem d) async {
-    if (d.localPath != null && await File(d.localPath!).exists()) return d.localPath;
+    if (d.localPath != null &&
+        await File(d.localPath!).exists()) {
+      return d.localPath;
+    }
     if (d.remoteUrl == null) return null;
 
     try {
       final token = await TokenStorage.getToken();
       final headers = {
         'Accept': '*/*',
-        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+        if (token != null && token.isNotEmpty)
+          'Authorization': 'Bearer $token',
       };
       final uri = Uri.parse(d.remoteUrl!);
 
-      // LOG: GET file download
       logDocReq(method: 'GET', url: uri, headers: headers);
       final res = await http.get(uri, headers: headers);
       logDocRes(res);
@@ -792,7 +932,12 @@ class _DocumentsPageState extends State<DocumentsPage> {
       if (res.statusCode == 200) {
         final dir = await getApplicationDocumentsDirectory();
         final ext = _extFromUrl(d.remoteUrl!);
-        final file = File(p.join(dir.path, 'dl_${d.id}_${DateTime.now().millisecondsSinceEpoch}$ext'));
+        final file = File(
+          p.join(
+            dir.path,
+            'dl_${d.id}_${DateTime.now().millisecondsSinceEpoch}$ext',
+          ),
+        );
         await file.writeAsBytes(res.bodyBytes);
         d.localPath = file.path;
         d.mimeType ??= _guessMimeFromExt(ext);
@@ -807,15 +952,34 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }
 
   Future<void> _share(DocumentItem d) async {
-    if (d.remoteUrl != null) {
-      await Share.share(d.remoteUrl!);
+    // 1. Ensure document is read from URL and is available locally
+    final local = await _ensureLocalFile(d);
+    if (local == null) {
+      _snack('No file to share');
       return;
     }
-    final local = await _ensureLocalFile(d);
-    if (local != null) {
-      await Share.shareXFiles([XFile(local)], text: d.title);
+
+    // 2. Save into "session storage" in base64 + meta
+    await saveDocToSession(
+      filePath: local,
+      remoteUrl: d.remoteUrl,
+    );
+
+    // 3. Read back from session and share that stored format
+    final stored = await readDocFromSession();
+    if (stored != null) {
+      final xFile = XFile.fromData(
+        stored.bytes,
+        mimeType: stored.mime,
+        name: stored.fileName,
+      );
+      await Share.shareXFiles(
+        [xFile],
+        text: stored.url ?? d.title,
+      );
     } else {
-      _snack('No file to share');
+      // Fallback: share local file directly
+      await Share.shareXFiles([XFile(local)], text: d.title);
     }
   }
 
@@ -825,28 +989,43 @@ class _DocumentsPageState extends State<DocumentsPage> {
       _snack('Nothing to download yet');
       return;
     }
-    final appDir = await getApplicationDocumentsDirectory();
-    final downloadsDir = Directory(p.join(appDir.path, 'Downloads'));
-    if (!await downloadsDir.exists()) {
-      await downloadsDir.create(recursive: true);
+    final savedPath = await saveToDownloadsFolder(local);
+    if (savedPath == null) {
+      _snack('Could not save file');
+    } else {
+      _snack('Saved to $savedPath');
     }
-    final filename = p.basename(local);
-    final dest = p.join(downloadsDir.path, filename);
-    await File(local).copy(dest);
-    _snack('Saved to ${downloadsDir.path}');
   }
 
   void _open(DocumentItem d) async {
     final local = await _ensureLocalFile(d);
     if (local == null) return;
 
-    final mime = d.mimeType ?? _guessMimeFromExt(p.extension(local));
+    final mime =
+        d.mimeType ?? _guessMimeFromExt(p.extension(local));
     if (mime.startsWith('image/')) {
       if (!mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => ImageViewerScreen(path: local, title: d.title)));
-    } else if (mime == 'application/pdf' || p.extension(local).toLowerCase() == '.pdf') {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ImageViewerScreen(
+            path: local,
+            title: d.title,
+            remoteUrl: d.remoteUrl,
+          ),
+        ),
+      );
+    } else if (mime == 'application/pdf' ||
+        p.extension(local).toLowerCase() == '.pdf') {
       if (!mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => PdfViewerScreen(path: local, title: d.title)));
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PdfViewerScreen(
+            path: local,
+            title: d.title,
+            remoteUrl: d.remoteUrl,
+          ),
+        ),
+      );
     } else {
       await OpenFilex.open(local);
     }
@@ -870,9 +1049,13 @@ class _DocumentsPageState extends State<DocumentsPage> {
     if (e == '.tif' || e == '.tiff') return 'image/tiff';
     if (e == '.pdf') return 'application/pdf';
     if (e == '.doc') return 'application/msword';
-    if (e == '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (e == '.docx') {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
     if (e == '.xls') return 'application/vnd.ms-excel';
-    if (e == '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    if (e == '.xlsx') {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
     if (e == '.txt') return 'text/plain';
     if (e == '.heic') return 'image/heic';
     return 'application/octet-stream';
@@ -880,30 +1063,67 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   bool _isImageExt(String ext) {
     final e = ext.toLowerCase();
-    return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(e);
+    return [
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.gif',
+      '.webp',
+      '.bmp',
+      '.tif',
+      '.tiff',
+      '.heic'
+    ].contains(e);
   }
 
-  void _selectForDelete(String id) => setState(() => _selectedId = id);
+  void _selectForDelete(String id) =>
+      setState(() => _selectedId = id);
   void _clearSelection() {
-    if (_selectedId != null) setState(() => _selectedId = null);
+    if (_selectedId != null) {
+      setState(() => _selectedId = null);
+    }
   }
 
-  void _snack(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _snack(String msg) =>
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(msg)));
+
+  bool _looksLikeImage(String s) {
+    final lower = s.toLowerCase();
+    if (lower.startsWith('image/')) return true;
+    final ext = p.extension(lower);
+    return [
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.gif',
+      '.webp',
+      '.bmp',
+      '.tif',
+      '.tiff',
+      '.heic'
+    ].contains(ext);
+  }
 
   // ------------- Build -------------
-
   Widget _buildEmptyState() {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 60.0, horizontal: 24.0),
+      padding:
+          const EdgeInsets.symmetric(vertical: 60.0, horizontal: 24.0),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.file_copy_outlined, size: 60, color: Colors.grey[400]),
+            Icon(Icons.file_copy_outlined,
+                size: 60, color: Colors.grey[400]),
             const SizedBox(height: 16),
             const Text(
               'No documents available',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black54),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.black54,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -938,19 +1158,26 @@ class _DocumentsPageState extends State<DocumentsPage> {
             title: Row(
               children: [
                 IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: const Icon(Icons.arrow_back,
+                      color: Colors.white),
+                  onPressed: () =>
+                      Navigator.of(context).maybePop(),
                 ),
-                Expanded(child: _DocsAppBarTitle(customer: widget.customer)),
+                Expanded(
+                  child: _DocsAppBarTitle(
+                    customer: widget.customer,
+                  ),
+                ),
                 IconButton(
-                  icon: const Icon(Icons.refresh, color: Colors.white),
+                  icon: const Icon(Icons.refresh,
+                      color: Colors.white),
                   onPressed: _refreshFromServer,
                   tooltip: 'Refresh',
                 ),
               ],
             ),
-            flexibleSpace: Container(
-              decoration: const BoxDecoration(
+            flexibleSpace: const DecoratedBox(
+              decoration: BoxDecoration(
                 image: DecorationImage(
                   image: AssetImage("assets/images/Background2.jpeg"),
                   fit: BoxFit.cover,
@@ -970,19 +1197,30 @@ class _DocumentsPageState extends State<DocumentsPage> {
                     color: Colors.white,
                     border: Border.all(color: borderColor),
                     borderRadius: BorderRadius.circular(12),
-                    boxShadow: const [BoxShadow(color: Colors.black12, offset: Offset(1, 1), blurRadius: 2)],
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black12,
+                        offset: Offset(1, 1),
+                        blurRadius: 2,
+                      ),
+                    ],
                   ),
                   child: Row(
                     children: [
                       Expanded(
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12),
                           child: TextField(
                             controller: _typeCtrl,
-                            style: const TextStyle(color: Colors.black),
+                            style:
+                                const TextStyle(color: Colors.black),
                             decoration: const InputDecoration(
                               hintText: 'Type',
-                              hintStyle: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+                              hintStyle: TextStyle(
+                                color: Colors.black54,
+                                fontWeight: FontWeight.w600,
+                              ),
                               border: InputBorder.none,
                             ),
                             onSubmitted: (_) => _addType(),
@@ -995,8 +1233,12 @@ class _DocumentsPageState extends State<DocumentsPage> {
                           style: OutlinedButton.styleFrom(
                             side: BorderSide(color: borderColor),
                             foregroundColor: borderColor,
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: BorderRadius.only(topRight: Radius.circular(11), bottomRight: Radius.circular(11)),
+                            shape:
+                                const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.only(
+                                topRight: Radius.circular(11),
+                                bottomRight: Radius.circular(11),
+                              ),
                             ),
                           ),
                           onPressed: _addType,
@@ -1009,34 +1251,57 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
                 // Header
                 Padding(
-                  padding: EdgeInsets.symmetric(horizontal: padding),
+                  padding:
+                      EdgeInsets.symmetric(horizontal: padding),
                   child: Row(
                     children: [
-                      Text('Documents List', style: TextStyle(fontSize: width * 0.045, fontWeight: FontWeight.bold, color: borderColor)),
+                      Text(
+                        'Documents List',
+                        style: TextStyle(
+                          fontSize: width * 0.045,
+                          fontWeight: FontWeight.bold,
+                          color: borderColor,
+                        ),
+                      ),
                       if (_loading) ...[
                         const SizedBox(width: 8),
-                        const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2),
+                        ),
                       ],
                     ],
                   ),
                 ),
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
-                  child: Divider(height: 1, thickness: 1, color: Colors.black12),
+                  child: Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: Colors.black12,
+                  ),
                 ),
 
                 if (listCount == 0 && !_loading)
                   _buildEmptyState()
                 else
                   ListView.separated(
-                    padding: EdgeInsets.fromLTRB(padding, 10, padding, padding),
+                    padding: EdgeInsets.fromLTRB(
+                        padding, 10, padding, padding),
                     shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
+                    physics:
+                        const NeverScrollableScrollPhysics(),
                     itemCount: listCount,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    separatorBuilder: (_, __) =>
+                        const SizedBox(height: 12),
                     itemBuilder: (context, index) {
-                      final isPendingRow = index < _pending.length;
-                      final d = isPendingRow ? _pending[index] : _serverDocs[index - _pending.length];
+                      final isPendingRow =
+                          index < _pending.length;
+                      final d = isPendingRow
+                          ? _pending[index]
+                          : _serverDocs[index - _pending.length];
                       final selected = _selectedId == d.id;
 
                       if (isPendingRow) {
@@ -1053,10 +1318,12 @@ class _DocumentsPageState extends State<DocumentsPage> {
                             onTap: () {
                               if (selected) _clearSelection();
                             },
-                            onLongPress: () => _selectForDelete(d.id),
+                            onLongPress: () =>
+                                _selectForDelete(d.id),
                             onDelete: () {
                               setState(() {
-                                _pending.removeWhere((x) => x.id == d.id);
+                                _pending.removeWhere(
+                                    (x) => x.id == d.id);
                                 _selectedId = null;
                               });
                             },
@@ -1068,19 +1335,26 @@ class _DocumentsPageState extends State<DocumentsPage> {
                         );
                       } else {
                         // Server doc row (hidden if deleted)
-                        final looksImage = _looksLikeImage(d.mimeType ?? d.remoteUrl ?? '');
-                        final preview = looksImage && d.remoteUrl != null
-                            ? (url: d.remoteUrl!)
-                            : null;
+                        final looksImage = _looksLikeImage(
+                            d.mimeType ?? d.remoteUrl ?? '');
+                        final Widget? previewWidget =
+                            looksImage && d.remoteUrl != null
+                                ? Image.network(
+                                    d.remoteUrl!,
+                                    height: 160,
+                                    fit: BoxFit.cover,
+                                  )
+                                : null;
 
                         return hideIfDeleted(
-                          deletedSource: _deletedById[d.id] ?? false,
+                          deletedSource:
+                              _deletedById[d.id] ?? false,
                           child: _DocCard(
                             title: d.title,
                             borderColor: borderColor,
                             iconColor: iconColor,
                             selected: selected,
-              
+                            preview: previewWidget,
                             showUpload: false,
                             onTap: () {
                               if (selected) {
@@ -1089,7 +1363,8 @@ class _DocumentsPageState extends State<DocumentsPage> {
                                 _open(d);
                               }
                             },
-                            onLongPress: () => _selectForDelete(d.id),
+                            onLongPress: () =>
+                                _selectForDelete(d.id),
                             onDelete: () => _deleteDoc(d),
                             onUpload: null,
                             onDownload: () => _download(d),
@@ -1107,12 +1382,76 @@ class _DocumentsPageState extends State<DocumentsPage> {
       ),
     );
   }
+}
 
-  bool _looksLikeImage(String s) {
-    final lower = s.toLowerCase();
-    if (lower.startsWith('image/')) return true;
-    final ext = p.extension(lower);
-    return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(ext);
+// -------- Download to device storage helper --------
+Future<String?> saveToDownloadsFolder(String sourcePath) async {
+  final srcFile = File(sourcePath);
+  if (!await srcFile.exists()) return null;
+
+  Directory baseDir;
+  if (Platform.isAndroid) {
+    baseDir = (await getExternalStorageDirectory()) ??
+        await getApplicationDocumentsDirectory();
+  } else {
+    baseDir = await getApplicationDocumentsDirectory();
+  }
+
+  final downloadsDir = Directory(p.join(baseDir.path, 'Downloads'));
+  if (!await downloadsDir.exists()) {
+    await downloadsDir.create(recursive: true);
+  }
+
+  final fileName = p.basename(sourcePath);
+  final destPath = p.join(downloadsDir.path, fileName);
+  await srcFile.copy(destPath);
+  return destPath;
+}
+
+// -------- Session store helpers: save/read full document --------
+Future<void> saveDocToSession({
+  required String filePath,
+  String? remoteUrl,
+}) async {
+  try {
+    final bytes = await File(filePath).readAsBytes();
+    final b64 = base64Encode(bytes);
+    final mime =
+        _DocumentsPageState._guessMimeFromExt(p.extension(filePath));
+    final name = p.basename(filePath);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kLastDocBase64Key, b64);
+    await prefs.setString(_kLastDocMimeKey, mime);
+    await prefs.setString(_kLastDocNameKey, name);
+    if (remoteUrl != null && remoteUrl.isNotEmpty) {
+      await prefs.setString(_kLastDocUrlKey, remoteUrl);
+    }
+  } catch (e) {
+    debugPrint('saveDocToSession failed: $e');
+  }
+}
+
+Future<StoredSessionDoc?> readDocFromSession() async {
+  final prefs = await SharedPreferences.getInstance();
+  final b64 = prefs.getString(_kLastDocBase64Key);
+  if (b64 == null || b64.isEmpty) return null;
+
+  final mime =
+      prefs.getString(_kLastDocMimeKey) ?? 'application/octet-stream';
+  final name = prefs.getString(_kLastDocNameKey) ?? 'document';
+  final url = prefs.getString(_kLastDocUrlKey);
+  try {
+    final bytes = base64Decode(b64);
+    return StoredSessionDoc(
+      bytes: bytes,
+      mime: mime,
+      fileName: name,
+      url: url,
+    );
+  } catch (e) {
+    debugPrint('readDocFromSession failed: $e');
+    return null;
   }
 }
 
@@ -1122,8 +1461,12 @@ class _DocsAppBarTitle extends StatelessWidget {
   final model.Customer customer;
 
   String _initials(String name, String surname) {
-    final a = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '';
-    final b = surname.trim().isNotEmpty ? surname.trim()[0].toUpperCase() : '';
+    final a = name.trim().isNotEmpty
+        ? name.trim()[0].toUpperCase()
+        : '';
+    final b = surname.trim().isNotEmpty
+        ? surname.trim()[0].toUpperCase()
+        : '';
     final s = (a + b).trim();
     return s.isEmpty ? '?' : s;
   }
@@ -1131,7 +1474,8 @@ class _DocsAppBarTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     ImageProvider? imgProvider;
-    if (customer.imageBytes != null && customer.imageBytes!.isNotEmpty) {
+    if (customer.imageBytes != null &&
+        customer.imageBytes!.isNotEmpty) {
       imgProvider = MemoryImage(customer.imageBytes!);
     }
 
@@ -1145,7 +1489,8 @@ class _DocsAppBarTitle extends StatelessWidget {
           backgroundImage: imgProvider,
           child: imgProvider == null
               ? Text(
-                  _initials(customer.name, customer.surname),
+                  _initials(
+                      customer.name, customer.surname),
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
@@ -1156,8 +1501,10 @@ class _DocsAppBarTitle extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment:
+                MainAxisAlignment.center,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
             children: [
               Text(
                 fullName.isEmpty ? 'Customer' : fullName,
@@ -1167,7 +1514,13 @@ class _DocsAppBarTitle extends StatelessWidget {
                   color: Colors.white,
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
-                  shadows: [Shadow(blurRadius: 6, color: Colors.black54, offset: Offset(1, 1))],
+                  shadows: [
+                    Shadow(
+                      blurRadius: 6,
+                      color: Colors.black54,
+                      offset: Offset(1, 1),
+                    )
+                  ],
                 ),
               ),
               if (customer.phone.trim().isNotEmpty)
@@ -1179,7 +1532,13 @@ class _DocsAppBarTitle extends StatelessWidget {
                     color: Colors.white70,
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
-                    shadows: [Shadow(blurRadius: 6, color: Colors.black54, offset: Offset(1, 1))],
+                    shadows: [
+                      Shadow(
+                        blurRadius: 6,
+                        color: Colors.black54,
+                        offset: Offset(1, 1),
+                      )
+                    ],
                   ),
                 ),
             ],
@@ -1203,7 +1562,7 @@ class _DocCard extends StatelessWidget {
     required this.iconColor,
     required this.selected,
     required this.showUpload,
-    this.preview,
+    required this.preview,
     this.onLongPress,
     this.onDelete,
   });
@@ -1225,8 +1584,10 @@ class _DocCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = selected ? Colors.red : Colors.white;
-    final textColor = selected ? Colors.white : Colors.black87;
-    final border = selected ? Colors.red : borderColor;
+    final textColor =
+        selected ? Colors.white : Colors.black87;
+    final border =
+        selected ? Colors.red : borderColor;
 
     return Material(
       color: bg,
@@ -1238,63 +1599,91 @@ class _DocCard extends StatelessWidget {
         onTap: onTap,
         onLongPress: onLongPress,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(
+              horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: border, width: 1),
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
             children: [
-              // Top row
               Row(
                 children: [
                   Expanded(
-                    child: Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: textColor)),
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: textColor,
+                      ),
+                    ),
                   ),
                   Row(
                     children: [
                       if (showUpload && onUpload != null)
                         IconButton(
                           onPressed: onUpload,
-                          icon: Icon(Icons.upload_rounded, color: iconColor, size: 24),
+                          icon: Icon(
+                            Icons.upload_rounded,
+                            color: iconColor,
+                            size: 24,
+                          ),
                           tooltip: 'Upload',
                         ),
                       if (onOpen != null)
                         IconButton(
                           onPressed: onOpen,
-                          icon: Icon(Icons.visibility_rounded, color: iconColor, size: 22),
+                          icon: Icon(
+                            Icons.visibility_rounded,
+                            color: iconColor,
+                            size: 22,
+                          ),
                           tooltip: 'Open',
                         ),
                       if (onDownload != null)
                         IconButton(
                           onPressed: onDownload,
-                          icon: Icon(Icons.download_rounded, color: iconColor, size: 24),
+                          icon: Icon(
+                            Icons.download_rounded,
+                            color: iconColor,
+                            size: 24,
+                          ),
                           tooltip: 'Download',
                         ),
                       if (onShare != null)
                         IconButton(
                           onPressed: onShare,
-                          icon: Icon(Icons.share, color: iconColor, size: 22),
+                          icon: Icon(
+                            Icons.share,
+                            color: iconColor,
+                            size: 22,
+                          ),
                           tooltip: 'Share',
                         ),
                       if (selected && onDelete != null)
                         IconButton(
                           onPressed: onDelete,
-                          icon: const Icon(Icons.delete, color: Colors.white, size: 24),
+                          icon: const Icon(
+                            Icons.delete,
+                            color: Colors.white,
+                            size: 24,
+                          ),
                           tooltip: 'Delete',
                         ),
                     ],
                   ),
                 ],
               ),
-              // Inline preview for images (auto-removed when not available)
               if (preview != null) ...[
                 const SizedBox(height: 10),
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: preview, // height handled within preview widget
+                  borderRadius:
+                      BorderRadius.circular(10),
+                  child: preview,
                 ),
               ],
             ],
@@ -1305,36 +1694,105 @@ class _DocCard extends StatelessWidget {
   }
 }
 
-// Image viewer (local file path)
+// ---------------- Image viewer ----------------
 class ImageViewerScreen extends StatelessWidget {
-  const ImageViewerScreen({super.key, required this.path, required this.title});
+  const ImageViewerScreen({
+    super.key,
+    required this.path,
+    required this.title,
+    this.remoteUrl,
+  });
+
   final String path;
   final String title;
+  final String? remoteUrl;
+
+  Future<void> _onShare(BuildContext context) async {
+    // 1. Save current viewed image into session
+    await saveDocToSession(
+      filePath: path,
+      remoteUrl: remoteUrl,
+    );
+
+    // 2. Read back from session and share stored format
+    final stored = await readDocFromSession();
+    if (stored != null) {
+      final xFile = XFile.fromData(
+        stored.bytes,
+        mimeType: stored.mime,
+        name: stored.fileName,
+      );
+      await Share.shareXFiles(
+        [xFile],
+        text: stored.url ?? title,
+      );
+    } else {
+      // fallback
+      await Share.shareXFiles(
+        [XFile(path)],
+        text: title,
+      );
+    }
+  }
+
+  Future<void> _onDownload(BuildContext context) async {
+    final savedPath = await saveToDownloadsFolder(path);
+    final msg = savedPath == null
+        ? 'Could not save file'
+        : 'Saved to $savedPath';
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(title), backgroundColor: const Color(0xFF38B6E4)),
+      appBar: AppBar(
+        title: Text(title),
+        backgroundColor: const Color(0xFF38B6E4),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.download_rounded),
+            onPressed: () => _onDownload(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.share),
+            onPressed: () => _onShare(context),
+          ),
+        ],
+      ),
       body: PhotoView(
-        backgroundDecoration: const BoxDecoration(color: Colors.white),
+        backgroundDecoration:
+            const BoxDecoration(color: Colors.white),
         imageProvider: FileImage(File(path)),
         minScale: PhotoViewComputedScale.contained,
-        maxScale: PhotoViewComputedScale.covered * 2.5,
+        maxScale:
+            PhotoViewComputedScale.covered * 2.5,
       ),
     );
   }
 }
 
+// ---------------- PDF viewer ----------------
 class PdfViewerScreen extends StatefulWidget {
-  const PdfViewerScreen({super.key, required this.path, required this.title});
+  const PdfViewerScreen({
+    super.key,
+    required this.path,
+    required this.title,
+    this.remoteUrl,
+  });
+
   final String path;
   final String title;
+  final String? remoteUrl;
 
   @override
-  State<PdfViewerScreen> createState() => _PdfViewerScreenState();
+  State<PdfViewerScreen> createState() =>
+      _PdfViewerScreenState();
 }
 
-class _PdfViewerScreenState extends State<PdfViewerScreen> {
+class _PdfViewerScreenState
+    extends State<PdfViewerScreen> {
   late PdfControllerPinch controller;
 
   @override
@@ -1351,12 +1809,58 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     super.dispose();
   }
 
+  Future<void> _onShare() async {
+    await saveDocToSession(
+      filePath: widget.path,
+      remoteUrl: widget.remoteUrl,
+    );
+
+    final stored = await readDocFromSession();
+    if (stored != null) {
+      final xFile = XFile.fromData(
+        stored.bytes,
+        mimeType: stored.mime,
+        name: stored.fileName,
+      );
+      await Share.shareXFiles(
+        [xFile],
+        text: stored.url ?? widget.title,
+      );
+    } else {
+      await Share.shareXFiles(
+        [XFile(widget.path)],
+        text: widget.title,
+      );
+    }
+  }
+
+  Future<void> _onDownload() async {
+    final savedPath =
+        await saveToDownloadsFolder(widget.path);
+    final msg = savedPath == null
+        ? 'Could not save file'
+        : 'Saved to $savedPath';
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
         backgroundColor: const Color(0xFF38B6E4),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.download_rounded),
+            onPressed: _onDownload,
+          ),
+          IconButton(
+            icon: const Icon(Icons.share),
+            onPressed: _onShare,
+          ),
+        ],
       ),
       body: PdfViewPinch(controller: controller),
     );

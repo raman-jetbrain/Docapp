@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:docapp/api/api_constant.dart';
-import 'package:docapp/api/description_api.dart'; // Must implement required methods
+import 'package:docapp/api/description_api.dart'; // Provides CustomerApi
 import 'package:docapp/model/customer.dart';
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +13,35 @@ import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+
+// ================== Child Data Model ==================
+class _ChildData {
+  int? id; // existing child ID from server, or null/0 for new
+  String name; // child name
+  String? gender; // 'male' / 'female' / 'transgender' or similar
+  DateTime? dob; // child date of birth
+
+  _ChildData({
+    this.id,
+    required this.name,
+    this.gender,
+    this.dob,
+  });
+
+  /// Convert to JSON for API.
+  /// NOTE: ParentCustomerDataId will be injected by CustomerApi based on the parent Id.
+  Map<String, dynamic> toJson({
+    required String? dobIso,
+  }) {
+    return {
+      "Id": id ?? 0, // CHILD row id (0 for new)
+      "Name": name,
+      "Gender": (gender ?? '').toLowerCase(),
+      "DOB": dobIso,
+      // DO NOT send ParentCustomerDataId here; API layer will attach it.
+    };
+  }
+}
 
 class DescriptionPage extends StatefulWidget {
   final Customer customer;
@@ -71,6 +100,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
   List<_ServerDoc> _serverDocs = [];
   final Set<String> _deletingDocIds = {};
 
+  // Children
+  List<_ChildData> _children = [];
+
   // IDs
   int? _serverId;
 
@@ -119,10 +151,13 @@ class _DescriptionPageState extends State<DescriptionPage> {
           final name = (item['name'] ?? '').toString();
           final surname = (item['surname'] ?? '').toString();
           final phone = (item['phone'] ?? '').toString();
-          if (name == _customer.name && surname == _customer.surname && phone == _customer.phone) {
+          if (name == _customer.name &&
+              surname == _customer.surname &&
+              phone == _customer.phone) {
             final id = item['serverId'];
             if (id != null) {
-              setState(() => _serverId = (id is int) ? id : int.tryParse(id.toString()));
+              setState(() =>
+                  _serverId = (id is int) ? id : int.tryParse(id.toString()));
             }
             break;
           }
@@ -147,8 +182,11 @@ class _DescriptionPageState extends State<DescriptionPage> {
         if (e is Map) {
           final ph = (e['PhoneNumber'] ?? '').toString();
           if (_normPhone(ph) == myPhone && myPhone.isNotEmpty) {
-            final idVal = e['Id'] ?? e['ID'] ?? e['CustomerId'] ?? e['CustomerID'] ?? e['id'];
-            if (idVal != null) foundId = idVal is int ? idVal : int.tryParse(idVal.toString());
+            final idVal =
+                e['Id'] ?? e['ID'] ?? e['CustomerId'] ?? e['CustomerID'] ?? e['id'];
+            if (idVal != null) {
+              foundId = idVal is int ? idVal : int.tryParse(idVal.toString());
+            }
             break;
           }
         }
@@ -162,8 +200,14 @@ class _DescriptionPageState extends State<DescriptionPage> {
             final name = (e['Name'] ?? '').toString().trim().toLowerCase();
             final surname = (e['Surname'] ?? '').toString().trim().toLowerCase();
             if (name == first && surname == last) {
-              final idVal = e['Id'] ?? e['ID'] ?? e['CustomerId'] ?? e['CustomerID'] ?? e['id'];
-              if (idVal != null) foundId = idVal is int ? idVal : int.tryParse(idVal.toString());
+              final idVal = e['Id'] ??
+                  e['ID'] ??
+                  e['CustomerId'] ??
+                  e['CustomerID'] ??
+                  e['id'];
+              if (idVal != null) {
+                foundId = idVal is int ? idVal : int.tryParse(idVal.toString());
+              }
               break;
             }
           }
@@ -211,7 +255,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
 
       if (_serverDocs.isEmpty) {
         final fromPost = await _fetchDocumentsViaPost(id);
-        if (mounted && fromPost.isNotEmpty) setState(() => _serverDocs = fromPost);
+        if (mounted && fromPost.isNotEmpty) {
+          setState(() => _serverDocs = fromPost);
+        }
       }
     } catch (_) {
     } finally {
@@ -235,9 +281,13 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final g = (r['Gender'] ?? '').toString().trim().toLowerCase();
     if (g.startsWith('m')) {
       _gender = 'Male';
-    } else if (g.startsWith('f')) _gender = 'Female';
-    else if (g.isEmpty) _gender = null;
-    else _gender = 'TransGender';
+    } else if (g.startsWith('f')) {
+      _gender = 'Female';
+    } else if (g.isEmpty) {
+      _gender = null;
+    } else {
+      _gender = 'TransGender';
+    }
 
     // Dates
     final dobIso = (r['DOB'] ?? '').toString();
@@ -246,22 +296,29 @@ class _DescriptionPageState extends State<DescriptionPage> {
 
     final sdobIso = (r['SDOB'] ?? '').toString();
     _selectedRegisteredDOB = _tryParseIso(sdobIso);
-    _registeredDobCtrl.text = _selectedRegisteredDOB != null ? _fmt(_selectedRegisteredDOB!) : '';
+    _registeredDobCtrl.text =
+        _selectedRegisteredDOB != null ? _fmt(_selectedRegisteredDOB!) : '';
 
     // Martial/Marital and MarriedDate
     final ms = (r['MartialStatus'] ?? r['MaritalStatus'] ?? '').toString();
     _maritalStatus = ms.isEmpty ? null : ms;
 
-    final marriedIso = (r['MarriedDate'] ?? r['MarriageDate'] ?? '').toString();
+    final marriedIso =
+        (r['MarriedDate'] ?? r['MarriageDate'] ?? '').toString();
     _selectedMarriageDate = _tryParseIso(marriedIso);
-    _marriageDateCtrl.text = _selectedMarriageDate != null ? _fmt(_selectedMarriageDate!) : '';
+    _marriageDateCtrl.text =
+        _selectedMarriageDate != null ? _fmt(_selectedMarriageDate!) : '';
 
     // File info
     final fileIdVal = r['FileId'];
     final httpFileData = r['HttpFileData'];
     final httpFileIdVal = (httpFileData is Map) ? httpFileData['Id'] : null;
-    _fileId = fileIdVal is int ? fileIdVal : int.tryParse((fileIdVal ?? '').toString());
-    _httpFileId = httpFileIdVal is int ? httpFileIdVal : int.tryParse((httpFileIdVal ?? '').toString());
+    _fileId = fileIdVal is int
+        ? fileIdVal
+        : int.tryParse((fileIdVal ?? '').toString());
+    _httpFileId = httpFileIdVal is int
+        ? httpFileIdVal
+        : int.tryParse((httpFileIdVal ?? '').toString());
 
     // Profile image URL
     String fn = '';
@@ -275,7 +332,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
     if (_avatarUrl != null && _avatarUrl!.isNotEmpty) {
       _fetchBytesWithAuth(_avatarUrl!).then((b) {
         if (!mounted) return;
-        if (b != null && b.isNotEmpty) setState(() => _avatarBytes = b);
+        if (b != null && b.isNotEmpty) {
+          setState(() => _avatarBytes = b);
+        }
       });
     }
 
@@ -292,7 +351,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
           final fileName = (m['FileName'] ?? m['fileName'] ?? '').toString();
           final fileType = (m['FileType'] ?? m['fileType'] ?? '').toString();
           final urlStrRaw = (m['Url'] ?? m['url'] ?? fileName).toString();
-          final urlStr = urlStrRaw.isNotEmpty ? _resolveFileUrl(urlStrRaw) : '';
+          final urlStr =
+              urlStrRaw.isNotEmpty ? _resolveFileUrl(urlStrRaw) : '';
           _serverDocs.add(
             _ServerDoc(
               id: id,
@@ -302,6 +362,40 @@ class _DescriptionPageState extends State<DescriptionPage> {
               url: urlStr.isNotEmpty ? urlStr : null,
             ),
           );
+        }
+      }
+    }
+
+    // Children
+    _children = [];
+    final childList = r['ChildDatas'] ?? r['Children'];
+    if (childList is List) {
+      for (final c in childList) {
+        if (c is Map) {
+          final m = Map<String, dynamic>.from(c);
+          final idVal = m['Id'] ?? m['id'];
+          int? id;
+          if (idVal is int) {
+            id = idVal;
+          } else if (idVal != null) {
+            id = int.tryParse(idVal.toString());
+          }
+          final name = (m['Name'] ?? m['ChildName'] ?? '').toString();
+          final gender = (m['Gender'] ?? m['gender'] ?? '').toString();
+          final dobStr =
+              (m['DOB'] ?? m['Dob'] ?? m['DateOfBirth'] ?? '').toString();
+          final dob = _tryParseIso(dobStr);
+
+          if (name.trim().isNotEmpty) {
+            _children.add(
+              _ChildData(
+                id: id,
+                name: name,
+                gender: gender,
+                dob: dob,
+              ),
+            );
+          }
         }
       }
     }
@@ -321,9 +415,13 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final g = (c.gender ?? '').trim().toLowerCase();
     if (g.startsWith('m')) {
       _gender = 'Male';
-    } else if (g.startsWith('f')) _gender = 'Female';
-    else if (g.isEmpty) _gender = null;
-    else _gender = 'TransGender';
+    } else if (g.startsWith('f')) {
+      _gender = 'Female';
+    } else if (g.isEmpty) {
+      _gender = null;
+    } else {
+      _gender = 'TransGender';
+    }
 
     final dob = _parseLocalDate(c.dob);
     _selectedDOB = dob;
@@ -369,7 +467,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
     return null;
   }
 
-  String _fmt(DateTime dt) => "${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}";
+  String _fmt(DateTime dt) =>
+      "${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}";
 
   String _resolveFileUrl(String fileNameOrUrl) {
     if (fileNameOrUrl.isEmpty) return fileNameOrUrl;
@@ -396,7 +495,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
   }
 
   bool _docIsDeleted(Map<String, dynamic> m) {
-    final v = m['isDelete'] ?? m['IsDelete'] ?? m['IsDeleted'] ?? m['isDeleted'];
+    final v =
+        m['isDelete'] ?? m['IsDelete'] ?? m['IsDeleted'] ?? m['isDeleted'];
     return _toBool(v);
   }
 
@@ -459,7 +559,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
     if (jsonString != null) {
       final List<dynamic> list = json.decode(jsonString);
       setState(() {
-        _customEntries = list.map((e) => Map<String, String>.from(e)).toList();
+        _customEntries =
+            list.map((e) => Map<String, String>.from(e)).toList();
       });
     }
   }
@@ -480,13 +581,21 @@ class _DescriptionPageState extends State<DescriptionPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: typeController, decoration: const InputDecoration(labelText: "Type")),
-            TextField(controller: detailController, decoration: const InputDecoration(labelText: "Detail")),
+            TextField(
+                controller: typeController,
+                decoration: const InputDecoration(labelText: "Type")),
+            TextField(
+                controller: detailController,
+                decoration: const InputDecoration(labelText: "Detail")),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Add")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Add")),
         ],
       ),
     );
@@ -564,7 +673,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
       "FileData": b64,
       "FileName": isModified ? fileName : "",
       "FileType": isModified ? fileType : "",
-      "Remarks": (_serverRecord?['HttpFileData']?['Remarks'] ?? '').toString(),
+      "Remarks":
+          (_serverRecord?['HttpFileData']?['Remarks'] ?? '').toString(),
       "IsDeleted": false,
       "IsDelete": false,
       "CustomerDataId": customerId,
@@ -611,29 +721,38 @@ class _DescriptionPageState extends State<DescriptionPage> {
       final sdobZ = _isoUtcNoon(_selectedRegisteredDOB) ?? dobZ;
       final marriedZ = _isoUtcNoon(_selectedMarriageDate);
 
+      // Build children payload.
+      final childrenPayload = _children
+          .map((c) => c.toJson(
+                dobIso: _isoUtcNoon(c.dob),
+              ))
+          .toList();
+
       final payload = <String, dynamic>{
-        "Id": _serverId!,                        // required for update
+        "Id": _serverId!, // parent row id
         "Name": _nameCtrl.text.trim(),
         "Surname": _surnameCtrl.text.trim(),
         "PhoneNumber": _phoneCtrl.text.trim(),
         "FileId": nextFileId,
         "EmailId": _emailCtrl.text.trim(),
         "Address": _addressCtrl.text.trim(),
-        "Gender": (_gender ?? '').toLowerCase(), // consistent with Add page
+        "Gender": (_gender ?? '').toLowerCase(),
         "Others": _othersCtrl.text.trim(),
 
-        // exact keys with Z timestamps
-        if (dobZ != null)  "DOB": dobZ,
+        if (dobZ != null) "DOB": dobZ,
         if (sdobZ != null) "SDOB": sdobZ,
         "MartialStatus": _maritalStatus ?? "",
-        "MarriedDate": (_maritalStatus?.toLowerCase() == 'married') ? (marriedZ ?? sdobZ ?? dobZ) : null,
+        "MarriedDate": (_maritalStatus?.toLowerCase() == 'married')
+            ? (marriedZ ?? sdobZ ?? dobZ)
+            : null,
 
-        // image
         "HttpFileData": httpFileData,
 
-        // optional
-        "ChildDatas": <dynamic>[],
-        "Documents": isModified ? [Map<String, dynamic>.from(httpFileData)] : <dynamic>[],
+        "ChildDatas": childrenPayload,
+
+        "Documents": isModified
+            ? [Map<String, dynamic>.from(httpFileData)]
+            : <dynamic>[],
       };
 
       final token = await _resolveToken();
@@ -657,10 +776,16 @@ class _DescriptionPageState extends State<DescriptionPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Delete Customer"),
-        content: const Text("Are you sure you want to delete this customer from the server and locally?"),
+        content: const Text(
+            "Are you sure you want to delete this customer from the server and locally?"),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Delete", style: TextStyle(color: Colors.red))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Delete",
+                  style: TextStyle(color: Colors.red))),
         ],
       ),
     );
@@ -681,7 +806,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final token = await _resolveToken();
     if (token == null || token.isEmpty) return false;
 
-    final url = '${_api.baseWithoutApi}/api/CustomerDataM/DeleteAsync/$id';
+    final url =
+        '${_api.baseWithoutApi}/api/CustomerDataM/DeleteAsync/$id';
     final res = await http.delete(
       Uri.parse(url),
       headers: {
@@ -699,8 +825,12 @@ class _DescriptionPageState extends State<DescriptionPage> {
       List<dynamic> list = json.decode(customersJson);
       list.removeWhere((item) {
         final m = Map<String, dynamic>.from(item);
-        final matchById = (m['serverId']?.toString() ?? '') == (_serverId?.toString() ?? '');
-        final matchByFields = m['name'] == _customer.name && m['surname'] == _customer.surname && m['phone'] == _customer.phone;
+        final matchById =
+            (m['serverId']?.toString() ?? '') ==
+            (_serverId?.toString() ?? '');
+        final matchByFields = m['name'] == _customer.name &&
+            m['surname'] == _customer.surname &&
+            m['phone'] == _customer.phone;
         return matchById || matchByFields;
       });
       await prefs.setString('customers', json.encode(list));
@@ -740,23 +870,31 @@ class _DescriptionPageState extends State<DescriptionPage> {
         if (_serverId != null)
           IconButton(
             tooltip: 'Refresh',
-            onPressed: _isLoading ? null : () async {
-              await _fetchCustomerById(_serverId!);
-            },
+            onPressed: _isLoading
+                ? null
+                : () async {
+                    await _fetchCustomerById(_serverId!);
+                  },
             icon: const Icon(Icons.refresh, color: Colors.black),
           ),
         IconButton(
           tooltip: 'Share all',
-          onPressed: (_serverDocs.isEmpty || _sharingAll) ? null : _shareAllDocuments,
+          onPressed:
+              (_serverDocs.isEmpty || _sharingAll) ? null : _shareAllDocuments,
           icon: _sharingAll
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : const Icon(Icons.share, color: Colors.black),
         ),
       ],
       child: _serverDocs.isEmpty
           ? const Padding(
               padding: EdgeInsets.symmetric(vertical: 6),
-              child: Text('No documents found', style: TextStyle(color: Colors.black54)),
+              child: Text('No documents found',
+                  style: TextStyle(color: Colors.black54)),
             )
           : Column(
               children: [
@@ -769,7 +907,6 @@ class _DescriptionPageState extends State<DescriptionPage> {
                     fetchBytes: _fetchBytesWithAuth,
                     onDelete: () => _deleteDocument(doc),
                     deleting: _deletingDocIds.contains(doc.id),
-                    // NEW:
                     onEdit: () => _editDocument(doc),
                     onInfo: () => _showDocDetails(doc),
                   ),
@@ -793,11 +930,20 @@ class _DescriptionPageState extends State<DescriptionPage> {
         final remarks = (m['Remarks'] ?? m['remarks'] ?? '').toString();
         final fileName = (m['FileName'] ?? m['fileName'] ?? '').toString();
         final fileType = (m['FileType'] ?? m['fileType'] ?? '').toString();
-        final urlRaw = (m['Url'] ?? m['url'] ?? m['DocumentUrl'] ?? m['DownloadUrl'] ?? m['FileUrl'] ?? m['FilePath'] ?? fileName).toString();
+        final urlRaw = (m['Url'] ??
+                m['url'] ??
+                m['DocumentUrl'] ??
+                m['DownloadUrl'] ??
+                m['FileUrl'] ??
+                m['FilePath'] ??
+                fileName)
+            .toString();
         final resolved = urlRaw.isNotEmpty ? _resolveFileUrl(urlRaw) : null;
 
         list.add(_ServerDoc(
-          id: idStr.isEmpty ? DateTime.now().microsecondsSinceEpoch.toString() : idStr,
+          id: idStr.isEmpty
+              ? DateTime.now().microsecondsSinceEpoch.toString()
+              : idStr,
           remarks: remarks,
           fileName: fileName.isNotEmpty ? fileName : (urlRaw.isNotEmpty ? urlRaw : 'Document'),
           fileType: fileType,
@@ -821,11 +967,14 @@ class _DescriptionPageState extends State<DescriptionPage> {
         title: const Text('Delete Document'),
         content: Text('Delete "${doc.fileName}"?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+            child: const Text('Delete',
+                style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -855,7 +1004,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final token = await _resolveToken();
     if (token == null || token.isEmpty || _serverId == null) return false;
 
-    final url = '${_api.baseWithoutApi}/api/CustomerDataM/FileRecordUpdateAsync';
+    final url =
+        '${_api.baseWithoutApi}/api/CustomerDataM/FileRecordUpdateAsync';
     final idInt = int.tryParse(doc.id);
     final payload = {
       "Id": idInt ?? 0,
@@ -913,8 +1063,12 @@ class _DescriptionPageState extends State<DescriptionPage> {
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save')),
         ],
       ),
     );
@@ -928,7 +1082,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
       return;
     }
 
-    final ok = await _updateDocumentMeta(doc, fileName: newName, remarks: newRemarks);
+    final ok =
+        await _updateDocumentMeta(doc, fileName: newName, remarks: newRemarks);
     if (ok) {
       setState(() {
         final idx = _serverDocs.indexWhere((d) => d.id == doc.id);
@@ -949,11 +1104,13 @@ class _DescriptionPageState extends State<DescriptionPage> {
     }
   }
 
-  Future<bool> _updateDocumentMeta(_ServerDoc doc, {required String fileName, String? remarks}) async {
+  Future<bool> _updateDocumentMeta(_ServerDoc doc,
+      {required String fileName, String? remarks}) async {
     final token = await _resolveToken();
     if (token == null || token.isEmpty || _serverId == null) return false;
 
-    final url = '${_api.baseWithoutApi}/api/CustomerDataM/FileRecordUpdateAsync';
+    final url =
+        '${_api.baseWithoutApi}/api/CustomerDataM/FileRecordUpdateAsync';
     final idInt = int.tryParse(doc.id) ?? 0;
     final newType = _inferMimeFromNameOrType(fileName, doc.fileType);
 
@@ -999,30 +1156,43 @@ class _DescriptionPageState extends State<DescriptionPage> {
       showDragHandle: true,
       builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
             children: [
-              const Text('Document Details', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              const Text('Document Details',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700)),
               const SizedBox(height: 12),
               _kvRow('Name', doc.fileName),
-              _kvRow('Type', doc.fileType.isNotEmpty ? doc.fileType : '—'),
+              _kvRow('Type',
+                  doc.fileType.isNotEmpty ? doc.fileType : '—'),
               _kvRow('ID', doc.id),
-              if (doc.remarks.trim().isNotEmpty) _kvRow('Remarks', doc.remarks),
+              if (doc.remarks.trim().isNotEmpty)
+                _kvRow('Remarks', doc.remarks),
               if ((doc.url ?? '').isNotEmpty) ...[
                 const SizedBox(height: 6),
                 GestureDetector(
                   onLongPress: () {
-                    Clipboard.setData(ClipboardData(text: doc.url!));
+                    Clipboard.setData(
+                        ClipboardData(text: doc.url!));
                     Navigator.pop(ctx);
                     _snack('Link copied');
                   },
-                  child: _kvRow('URL', doc.url!, valueColor: Colors.blueGrey),
+                  child: _kvRow('URL', doc.url!,
+                      valueColor: Colors.blueGrey),
                 ),
               ],
               const SizedBox(height: 6),
-              _kvRow('Size', sizeBytes != null ? _formatBytes(sizeBytes) : 'Unknown'),
+              _kvRow(
+                  'Size',
+                  sizeBytes != null
+                      ? _formatBytes(sizeBytes)
+                      : 'Unknown'),
               const SizedBox(height: 16),
               Row(
                 children: [
@@ -1038,11 +1208,13 @@ class _DescriptionPageState extends State<DescriptionPage> {
                   if ((doc.url ?? '').isNotEmpty)
                     TextButton.icon(
                       onPressed: () {
-                        Clipboard.setData(ClipboardData(text: doc.url!));
+                        Clipboard.setData(
+                            ClipboardData(text: doc.url!));
                         Navigator.pop(ctx);
                         _snack('Link copied');
                       },
-                      icon: const Icon(Icons.copy_all_outlined),
+                      icon: const Icon(
+                          Icons.copy_all_outlined),
                       label: const Text('Copy link'),
                     ),
                   const Spacer(),
@@ -1061,12 +1233,20 @@ class _DescriptionPageState extends State<DescriptionPage> {
 
   Widget _kvRow(String k, String v, {Color? valueColor}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding:
+          const EdgeInsets.symmetric(vertical: 3),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 110, child: Text(k, style: const TextStyle(color: Colors.grey))),
-          Expanded(child: Text(v, style: TextStyle(color: valueColor ?? Colors.black87))),
+          SizedBox(
+              width: 110,
+              child: Text(k,
+                  style: const TextStyle(color: Colors.grey))),
+          Expanded(
+              child: Text(v,
+                  style: TextStyle(
+                      color: valueColor ?? Colors.black87))),
         ],
       ),
     );
@@ -1076,7 +1256,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final token = await _resolveToken();
     try {
       final headers = <String, String>{'Accept': '*/*'};
-      if (token != null && token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+      if (token != null && token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
 
       // Try HEAD first
       final head = await http.head(Uri.parse(url), headers: headers);
@@ -1087,8 +1269,10 @@ class _DescriptionPageState extends State<DescriptionPage> {
       }
 
       // Fallback: range request for quick size
-      final rangeHeaders = Map<String, String>.from(headers)..['Range'] = 'bytes=0-0';
-      final get = await http.get(Uri.parse(url), headers: rangeHeaders);
+      final rangeHeaders = Map<String, String>.from(headers)
+        ..['Range'] = 'bytes=0-0';
+      final get =
+          await http.get(Uri.parse(url), headers: rangeHeaders);
       final cr = get.headers['content-range']; // e.g., bytes 0-0/12345
       if (cr != null && cr.contains('/')) {
         final total = cr.split('/').last.trim();
@@ -1104,7 +1288,17 @@ class _DescriptionPageState extends State<DescriptionPage> {
     final s = mimeOrUrl.toLowerCase();
     if (s.startsWith('image/')) return true;
     final ext = p.extension(s);
-    return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(ext);
+    return [
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.gif',
+      '.webp',
+      '.bmp',
+      '.tif',
+      '.tiff',
+      '.heic'
+    ].contains(ext);
   }
 
   String _inferMimeFromNameOrType(String name, String fileType) {
@@ -1118,15 +1312,23 @@ class _DescriptionPageState extends State<DescriptionPage> {
     if (ext == '.pdf') return 'application/pdf';
     if (ext == '.csv') return 'text/csv';
     if (ext == '.xls') return 'application/vnd.ms-excel';
-    if (ext == '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    if (ext == '.xlsx') {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
     if (ext == '.doc') return 'application/msword';
-    if (ext == '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (ext == '.docx') {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
     if (ext == '.txt') return 'text/plain';
     final t = fileType.toLowerCase();
     if (t.startsWith('image/')) return t;
     if (t.contains('pdf')) return 'application/pdf';
-    if (t.contains('excel') || t.contains('sheet')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    if (t.contains('word')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (t.contains('excel') || t.contains('sheet')) {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+    if (t.contains('word')) {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
     if (t.contains('text')) return 'text/plain';
     return 'application/octet-stream';
   }
@@ -1176,7 +1378,9 @@ class _DescriptionPageState extends State<DescriptionPage> {
 
       final caption = StringBuffer();
       for (final d in _serverDocs) {
-        final line = d.remarks.trim().isEmpty ? d.fileName : '${d.fileName} - ${d.remarks}';
+        final line = d.remarks.trim().isEmpty
+            ? d.fileName
+            : '${d.fileName} - ${d.remarks}';
         caption.writeln(line);
       }
 
@@ -1197,13 +1401,16 @@ class _DescriptionPageState extends State<DescriptionPage> {
   }
 
   String _safeFileNameForDoc(_ServerDoc doc) {
-    final base = doc.fileName.trim().isNotEmpty ? doc.fileName.trim() : 'document_${doc.id}';
+    final base = doc.fileName.trim().isNotEmpty
+        ? doc.fileName.trim()
+        : 'document_${doc.id}';
     String ext = p.extension(base);
     if (ext.isEmpty) {
       final t = doc.fileType.toLowerCase();
       if (t.startsWith('image/')) {
         ext = '.${t.split('/').last}';
-      } else if ((doc.url ?? '').isNotEmpty && doc.url!.contains('.')) {
+      } else if ((doc.url ?? '').isNotEmpty &&
+          doc.url!.contains('.')) {
         ext = p.extension(Uri.parse(doc.url!).path);
       } else {
         ext = '.bin';
@@ -1213,13 +1420,17 @@ class _DescriptionPageState extends State<DescriptionPage> {
   }
 
   // ------------------------ UI helpers ------------------------
-  void _snack(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _snack(String msg) =>
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(msg)));
 
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(color: Colors.grey, fontSize: 16),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 12), // a tiny bit tighter
+      labelStyle:
+          const TextStyle(color: Colors.grey, fontSize: 16),
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: 0, vertical: 12),
       border: InputBorder.none,
     );
   }
@@ -1234,7 +1445,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius:
+            BorderRadius.circular(12),
         border: Border.all(color: Colors.black12),
         boxShadow: [
           BoxShadow(
@@ -1245,13 +1457,17 @@ class _DescriptionPageState extends State<DescriptionPage> {
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
           Row(children: [
             Expanded(
               child: Text(
                 title,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black87),
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87),
               ),
             ),
             if (actions != null) ...actions,
@@ -1274,7 +1490,8 @@ class _DescriptionPageState extends State<DescriptionPage> {
             label: Text(g),
             selected: _gender == g,
             onSelected: (v) => setState(() => _gender = g),
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            materialTapTargetSize:
+                MaterialTapTargetSize.shrinkWrap,
             visualDensity: VisualDensity.compact,
           ),
       ],
@@ -1300,10 +1517,211 @@ class _DescriptionPageState extends State<DescriptionPage> {
                 }
               });
             },
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            materialTapTargetSize:
+                MaterialTapTargetSize.shrinkWrap,
             visualDensity: VisualDensity.compact,
           ),
       ],
+    );
+  }
+
+  // ------------------------ Children UI & Dialog ------------------------
+  Future<void> _openChildDialog(
+      {_ChildData? child, int? index}) async {
+    final nameCtrl = TextEditingController(text: child?.name ?? '');
+    String? genderLocal = child?.gender;
+    DateTime? dobLocal = child?.dob;
+    final dobCtrl = TextEditingController(
+        text: dobLocal != null ? _fmt(dobLocal) : '');
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setStateDialog) => AlertDialog(
+          title:
+              Text(child == null ? 'Add Child' : 'Edit Child'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize:
+                  MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: (genderLocal != null &&
+                          genderLocal!.isNotEmpty)
+                      ? genderLocal![0].toUpperCase() +
+                          genderLocal!.substring(1)
+                              .toLowerCase()
+                      : null,
+                  decoration:
+                      const InputDecoration(labelText: 'Gender'),
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'Male', child: Text('Male')),
+                    DropdownMenuItem(
+                        value: 'Female', child: Text('Female')),
+                    DropdownMenuItem(
+                        value: 'TransGender',
+                        child: Text('TransGender')),
+                  ],
+                  onChanged: (val) {
+                    setStateDialog(() {
+                      genderLocal = val?.toLowerCase();
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: dobCtrl,
+                  readOnly: true,
+                  decoration:
+                      const InputDecoration(
+                    labelText: 'Date of Birth',
+                    suffixIcon:
+                        Icon(Icons.calendar_today, size: 20),
+                  ),
+                  onTap: () async {
+                    final now =
+                        DateTime.now();
+                    final init =
+                        dobLocal ?? now;
+                    final picked =
+                        await showDatePicker(
+                      context: ctx,
+                      initialDate: init,
+                      firstDate: DateTime(1900),
+                      lastDate: now,
+                    );
+                    if (picked !=
+                        null) {
+                      setStateDialog(() {
+                        dobLocal =
+                            picked;
+                        dobCtrl.text =
+                            _fmt(picked);
+                      });
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () =>
+                    Navigator.pop(ctx, false),
+                child:
+                    const Text('Cancel')),
+            ElevatedButton(
+                onPressed: () =>
+                    Navigator.pop(ctx, true),
+                child:
+                    const Text('Save')),
+          ],
+        ),
+      ),
+    );
+
+    if (saved != true) return;
+
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) {
+      _snack('Child name is required');
+      return;
+    }
+
+    setState(() {
+      if (child != null &&
+          index != null &&
+          index >= 0 &&
+          index < _children.length) {
+        _children[index] = _ChildData(
+          id: child.id,
+          name: name,
+          gender: genderLocal,
+          dob: dobLocal,
+        );
+      } else {
+        _children.add(
+          _ChildData(
+            id: null,
+            name: name,
+            gender: genderLocal,
+            dob: dobLocal,
+          ),
+        );
+      }
+    });
+  }
+
+  Widget _childRow(_ChildData c, int index) {
+    final dobText = c.dob != null ? _fmt(c.dob!) : '—';
+    final genderText =
+        (c.gender ?? '').isNotEmpty ? c.gender!.toString() : '—';
+
+    return Container(
+      margin:
+          const EdgeInsets.symmetric(vertical: 4),
+      padding:
+          const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius:
+            BorderRadius.circular(8),
+        border:
+            Border.all(color: Colors.black12),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: [
+                Text(
+                  c.name,
+                  style: const TextStyle(
+                      fontWeight:
+                          FontWeight.w600,
+                      color: Colors.black87),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Gender: $genderText',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54),
+                ),
+                Text(
+                  'DOB: $dobText',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Edit child',
+            icon: const Icon(Icons.edit_outlined, size: 20),
+            onPressed: () =>
+                _openChildDialog(child: c, index: index),
+          ),
+          IconButton(
+            tooltip: 'Delete child',
+            icon: const Icon(Icons.delete_outline,
+                size: 20, color: Colors.red),
+            onPressed: () {
+              setState(() =>
+                  _children.removeAt(index));
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -1319,42 +1737,60 @@ class _DescriptionPageState extends State<DescriptionPage> {
       appBar: AppBar(
         elevation: 0,
         toolbarHeight: 60,
-        backgroundColor: const Color.fromARGB(0, 255, 254, 254),
-        leading: const BackButton(color: Colors.white),
+        backgroundColor:
+            const Color.fromARGB(0, 255, 254, 254),
+        leading:
+            const BackButton(color: Colors.white),
         foregroundColor: Colors.white,
-        actionsIconTheme: const IconThemeData(color: Colors.white),
+        actionsIconTheme:
+            const IconThemeData(color: Colors.white),
         title: const Text(
           "Edit Customer",
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
         actions: [
           PopupMenuButton<String>(
             onSelected: (val) {
-              if (val == 'share') _shareCustomer();
-              if (val == 'delete') _deleteCustomer();
+              if (val == 'share') {
+                _shareCustomer();
+              }
+              if (val == 'delete') {
+                _deleteCustomer();
+              }
             },
             itemBuilder: (ctx) => const [
-              PopupMenuItem(value: 'share', child: Text('Share Info')),
-              PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
+              PopupMenuItem(
+                  value: 'share',
+                  child: Text('Share Info')),
+              PopupMenuItem(
+                  value: 'delete',
+                  child: Text('Delete',
+                      style: TextStyle(color: Colors.red))),
             ],
           ),
         ],
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             image: DecorationImage(
-              image: AssetImage("assets/images/Background2.jpeg"),
+              image:
+                  AssetImage("assets/images/Background2.jpeg"),
               fit: BoxFit.cover,
             ),
           ),
         ),
       ),
-
-      // Scrollable content
       body: _isLoading
-          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))
+          ? const Center(
+              child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: CircularProgressIndicator()),
+            )
           : SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 20, vertical: 12),
               child: Column(
                 children: [
                   // Profile Image
@@ -1364,63 +1800,97 @@ class _DescriptionPageState extends State<DescriptionPage> {
                       IconButton(
                         tooltip: 'View',
                         onPressed: () {
-                          if (_avatarBytes == null || _avatarBytes!.isEmpty) {
+                          if (_avatarBytes == null ||
+                              _avatarBytes!.isEmpty) {
                             _snack('No image available');
                             return;
                           }
                           Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => _ImageViewerScreen(
+                              builder: (_) =>
+                                  _ImageViewerScreen(
                                 bytes: _avatarBytes!,
-                                title: "$name $surname",
+                                title:
+                                    "$name $surname",
                               ),
                             ),
                           );
                         },
-                        icon: const Icon(Icons.open_in_new, color: Colors.black),
+                        icon: const Icon(
+                            Icons.open_in_new,
+                            color: Colors.black),
                       ),
                     ],
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
                       children: [
                         GestureDetector(
                           onTap: () async {
-                            final src = await showModalBottomSheet<ImageSource>(
+                            final src =
+                                await showModalBottomSheet<
+                                    ImageSource>(
                               context: context,
                               showDragHandle: true,
-                              builder: (ctx) => SafeArea(
+                              builder: (ctx) =>
+                                  SafeArea(
                                 child: Wrap(
                                   children: [
                                     ListTile(
-                                      leading: const Icon(Icons.camera_alt_outlined),
+                                      leading:
+                                          const Icon(Icons.camera_alt_outlined),
                                       title: const Text('Camera'),
-                                      onTap: () => Navigator.pop(ctx, ImageSource.camera),
+                                      onTap: () => Navigator.pop(
+                                          ctx,
+                                          ImageSource
+                                              .camera),
                                     ),
                                     ListTile(
-                                      leading: const Icon(Icons.photo_library_outlined),
+                                      leading:
+                                          const Icon(Icons.photo_library_outlined),
                                       title: const Text('Gallery'),
-                                      onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+                                      onTap: () =>
+                                          Navigator.pop(
+                                              ctx,
+                                              ImageSource
+                                                  .gallery),
                                     ),
                                   ],
                                 ),
                               ),
                             );
-                            if (src != null) await _pickImageFrom(src);
+                            if (src != null) {
+                              await _pickImageFrom(src);
+                            }
                           },
                           child: Container(
                             height: 180,
                             width: double.infinity,
                             decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.black12),
+                              color:
+                                  Colors.grey.shade100,
+                              borderRadius:
+                                  BorderRadius.circular(8),
+                              border: Border.all(
+                                  color:
+                                      Colors.black12),
                             ),
-                            child: _avatarBytes != null
+                            child: _avatarBytes !=
+                                        null
                                 ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Image.memory(_avatarBytes!, fit: BoxFit.cover),
+                                    borderRadius:
+                                        BorderRadius.circular(
+                                            8),
+                                    child: Image.memory(
+                                        _avatarBytes!,
+                                        fit: BoxFit.cover),
                                   )
-                                : const Center(child: Icon(Icons.person, color: Colors.black38, size: 64)),
+                                : const Center(
+                                    child: Icon(
+                                        Icons.person,
+                                        color:
+                                            Colors.black38,
+                                        size: 64)),
                           ),
                         ),
                       ],
@@ -1431,16 +1901,36 @@ class _DescriptionPageState extends State<DescriptionPage> {
                   _cardWrapper(
                     title: 'Name & Gender',
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
                       children: [
-                        TextField(controller: _surnameCtrl, decoration: _inputDecoration("Surname")),
-                        const Divider(color: Colors.black12),
-                        TextField(controller: _nameCtrl, decoration: _inputDecoration("Name")),
-                        const Divider(color: Colors.black12),
-                        const SizedBox(height: 2),
-                        const Text("Gender", style: TextStyle(color: Colors.grey)),
-                        const SizedBox(height: 6),
-                        _genderChips(), // responsive, no overflow
+                        TextField(
+                            controller:
+                                _surnameCtrl,
+                            decoration:
+                                _inputDecoration(
+                                    "Surname")),
+                        const Divider(
+                            color:
+                                Colors.black12),
+                        TextField(
+                            controller:
+                                _nameCtrl,
+                            decoration:
+                                _inputDecoration(
+                                    "Name")),
+                        const Divider(
+                            color:
+                                Colors.black12),
+                        const SizedBox(
+                            height: 2),
+                        const Text("Gender",
+                            style: TextStyle(
+                                color:
+                                    Colors.grey)),
+                        const SizedBox(
+                            height: 6),
+                        _genderChips(),
                       ],
                     ),
                   ),
@@ -1451,20 +1941,39 @@ class _DescriptionPageState extends State<DescriptionPage> {
                     child: Column(
                       children: [
                         TextField(
-                          controller: _dobCtrl,
+                          controller:
+                              _dobCtrl,
                           readOnly: true,
                           onTap: _pickDOB,
-                          decoration: _inputDecoration("Date of Birth").copyWith(
-                            suffixIcon: const Icon(Icons.calendar_today, color: Colors.black54, size: 20),
+                          decoration: _inputDecoration(
+                                  "Date of Birth")
+                              .copyWith(
+                            suffixIcon: const Icon(
+                                Icons
+                                    .calendar_today,
+                                color:
+                                    Colors.black54,
+                                size: 20),
                           ),
                         ),
-                        const Divider(color: Colors.black12),
+                        const Divider(
+                            color:
+                                Colors.black12),
                         TextField(
-                          controller: _registeredDobCtrl,
+                          controller:
+                              _registeredDobCtrl,
                           readOnly: true,
-                          onTap: _pickRegisteredDOB,
-                          decoration: _inputDecoration("Registered Date of Birth").copyWith(
-                            suffixIcon: const Icon(Icons.calendar_today, color: Colors.black54, size: 20),
+                          onTap:
+                              _pickRegisteredDOB,
+                          decoration: _inputDecoration(
+                                  "Registered Date of Birth")
+                              .copyWith(
+                            suffixIcon: const Icon(
+                                Icons
+                                    .calendar_today,
+                                color:
+                                    Colors.black54,
+                                size: 20),
                           ),
                         ),
                       ],
@@ -1476,34 +1985,67 @@ class _DescriptionPageState extends State<DescriptionPage> {
                     title: 'Contact',
                     child: Column(
                       children: [
-                        TextField(controller: _phoneCtrl, keyboardType: TextInputType.phone, decoration: _inputDecoration("Phone No")),
-                        const Divider(color: Colors.black12),
-                        TextField(controller: _emailCtrl, decoration: _inputDecoration("Email")),
+                        TextField(
+                            controller:
+                                _phoneCtrl,
+                            keyboardType:
+                                TextInputType.phone,
+                            decoration:
+                                _inputDecoration(
+                                    "Phone No")),
+                        const Divider(
+                            color:
+                                Colors.black12),
+                        TextField(
+                            controller:
+                                _emailCtrl,
+                            decoration:
+                                _inputDecoration(
+                                    "Email")),
                       ],
                     ),
                   ),
 
-                  // Address
+                  // Address (MULTI-LINE)
                   _cardWrapper(
                     title: 'Address',
-                    child: TextField(controller: _addressCtrl, decoration: _inputDecoration("Address")),
+                    child: TextField(
+                      controller: _addressCtrl,
+                      keyboardType: TextInputType.multiline,
+                      minLines: 2,      // show at least 2 lines
+                      maxLines: null,   // grow as user types more lines
+                      decoration: _inputDecoration("Address"),
+                    ),
                   ),
 
                   // Marital Status
                   _cardWrapper(
                     title: 'Marital Status',
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
                       children: [
                         _maritalChips(),
-                        if (_maritalStatus == 'Married') ...[
-                          const SizedBox(height: 8),
+                        if (_maritalStatus ==
+                            'Married') ...[
+                          const SizedBox(
+                              height: 8),
                           TextField(
-                            controller: _marriageDateCtrl,
+                            controller:
+                                _marriageDateCtrl,
                             readOnly: true,
-                            onTap: _pickMarriageDate,
-                            decoration: _inputDecoration("Marriage Date").copyWith(
-                              suffixIcon: const Icon(Icons.calendar_today, color: Colors.black54, size: 20),
+                            onTap:
+                                _pickMarriageDate,
+                            decoration:
+                                _inputDecoration(
+                                        "Marriage Date")
+                                    .copyWith(
+                              suffixIcon: const Icon(
+                                  Icons
+                                      .calendar_today,
+                                  color: Colors
+                                      .black54,
+                                  size: 20),
                             ),
                           ),
                         ],
@@ -1511,18 +2053,59 @@ class _DescriptionPageState extends State<DescriptionPage> {
                     ),
                   ),
 
+                  // Children
+                  // _cardWrapper(
+                  //   title: 'Children',
+                  //   actions: [
+                  //     IconButton(
+                  //       tooltip: 'Add Child',
+                  //       onPressed: () =>
+                  //           _openChildDialog(),
+                  //       icon: const Icon(
+                  //           Icons.add,
+                  //           color:
+                  //               Colors.black),
+                  //     ),
+                  //   ],
+                  //   child: _children.isEmpty
+                  //       ? const Padding(
+                  //           padding: EdgeInsets
+                  //               .symmetric(
+                  //                   vertical: 6),
+                  //           child: Text(
+                  //               'No child records',
+                  //               style: TextStyle(
+                  //                   color: Colors
+                  //                       .black54)),
+                  //         )
+                  //       : Column(
+                  //           children: [
+                  //             for (int i = 0;
+                  //                 i < _children.length;
+                  //                 i++)
+                  //               _childRow(
+                  //                   _children[i],
+                  //                   i),
+                  //           ],
+                  //         ),
+                  // ),
+
                   // Others + Custom entries
                   _cardWrapper(
                     title: 'Others',
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
                       children: [
                         TextField(
-                          controller: _othersCtrl,
+                          controller:
+                              _othersCtrl,
                           maxLines: 3,
-                          decoration: const InputDecoration(
+                          decoration:
+                              const InputDecoration(
                             hintText: 'Notes',
-                            border: OutlineInputBorder(),
+                            border:
+                                OutlineInputBorder(),
                             isDense: true,
                           ),
                         ),
@@ -1530,32 +2113,65 @@ class _DescriptionPageState extends State<DescriptionPage> {
                         Row(
                           children: [
                             Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _showAddCustomEntryDialog,
-                                icon: const Icon(Icons.add, color: kPrimaryBlue, size: 20),
-                                label: const Text("Add Custom Entry", style: TextStyle(color: kPrimaryBlue)),
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: kPrimaryBlue),
-                                  visualDensity: VisualDensity.compact,
+                              child:
+                                  OutlinedButton.icon(
+                                onPressed:
+                                    _showAddCustomEntryDialog,
+                                icon: const Icon(
+                                    Icons.add,
+                                    color:
+                                        kPrimaryBlue,
+                                    size: 20),
+                                label: const Text(
+                                    "Add Custom Entry",
+                                    style: TextStyle(
+                                        color:
+                                            kPrimaryBlue)),
+                                style:
+                                    OutlinedButton
+                                        .styleFrom(
+                                  side:
+                                      const BorderSide(
+                                          color:
+                                              kPrimaryBlue),
+                                  visualDensity:
+                                      VisualDensity
+                                          .compact,
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        if (_customEntries.isNotEmpty) ...[
-                          const SizedBox(height: 8),
+                        if (_customEntries
+                            .isNotEmpty) ...[
+                          const SizedBox(
+                              height: 8),
                           Wrap(
                             spacing: 4,
                             runSpacing: 4,
-                            children: _customEntries.map((entry) {
+                            children:
+                                _customEntries
+                                    .map((entry) {
                               return Chip(
-                                label: Text("${entry['type']}: ${entry['detail']}"),
-                                backgroundColor: Colors.grey.shade200,
-                                deleteIcon: const Icon(Icons.close, size: 16),
-                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                visualDensity: VisualDensity.compact,
-                                onDeleted: () async {
-                                  setState(() => _customEntries.remove(entry));
+                                label: Text(
+                                    "${entry['type']}: ${entry['detail']}"),
+                                backgroundColor:
+                                    Colors.grey
+                                        .shade200,
+                                deleteIcon: const Icon(
+                                    Icons.close,
+                                    size: 16),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize
+                                        .shrinkWrap,
+                                visualDensity:
+                                    VisualDensity
+                                        .compact,
+                                onDeleted:
+                                    () async {
+                                  setState(() =>
+                                      _customEntries.remove(
+                                          entry));
                                   await _saveCustomEntries();
                                 },
                               );
@@ -1566,39 +2182,58 @@ class _DescriptionPageState extends State<DescriptionPage> {
                     ),
                   ),
 
-                  // Documents (will show even if empty with a placeholder)
+                  // Documents
                   _documentsSection(),
 
-                  // Spacer so content doesn't go under bottom button
                   const SizedBox(height: 80),
                 ],
               ),
             ),
-
-      // Bottom Save button (fixed, smaller padding/spacing)
       bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        minimum: const EdgeInsets.symmetric(
+            horizontal: 18, vertical: 10),
         child: SizedBox(
           height: 50,
           child: ElevatedButton(
-            onPressed: _isSubmitting ? null : _saveAll,
+            onPressed:
+                _isSubmitting ? null : _saveAll,
             style: ElevatedButton.styleFrom(
               backgroundColor: kPrimaryBlue,
               foregroundColor: Colors.white,
               elevation: 3,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              padding: const EdgeInsets.symmetric(horizontal: 14), // tighter
+              shape: RoundedRectangleBorder(
+                  borderRadius:
+                      BorderRadius.circular(12)),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 14),
             ),
             child: _isSubmitting
                 ? Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment:
+                        MainAxisAlignment.center,
                     children: const [
-                      SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                      SizedBox(
+                          height: 16,
+                          width: 16,
+                          child:
+                              CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color:
+                                      Colors.white)),
                       SizedBox(width: 6),
-                      Text("Saving...", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                      Text("Saving...",
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight:
+                                  FontWeight
+                                      .w600)),
                     ],
                   )
-                : const Text("Save Changes", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                : const Text("Save Changes",
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight:
+                            FontWeight.w700)),
           ),
         ),
       ),
@@ -1612,12 +2247,70 @@ class _ImageViewerScreen extends StatelessWidget {
   final String? title;
   const _ImageViewerScreen({required this.bytes, this.title});
 
+  String _safeName() {
+    String base =
+        (title?.trim().isNotEmpty == true ? title!.trim() : 'image')
+            .replaceAll(RegExp(r'\s+'), '_');
+    // Keep existing extension if any, otherwise default to .jpg
+    final ext = p.extension(base);
+    if (ext.isEmpty) {
+      base = '$base.jpg';
+    }
+    return base;
+  }
+
+  String _inferMimeType(String name) {
+    final ext = p.extension(name).toLowerCase();
+    switch (ext) {
+      case '.png':
+        return 'image/png';
+      case '.jpg':
+      case '.jpeg':
+        return 'image/jpeg';
+      case '.gif':
+        return 'image/gif';
+      case '.webp':
+        return 'image/webp';
+      case '.bmp':
+        return 'image/bmp';
+      case '.tif':
+      case '.tiff':
+        return 'image/tiff';
+      default:
+        return 'image/*';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(title?.trim().isNotEmpty == true ? title! : 'Image'), backgroundColor: const Color(0xFF38B6E4)),
+      appBar: AppBar(
+        title: Text(
+          title?.trim().isNotEmpty == true ? title! : 'Image',
+        ),
+        backgroundColor: const Color(0xFF38B6E4),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.share),
+            onPressed: () async {
+              final name = _safeName();
+              final mime = _inferMimeType(name);
+              final xFile = XFile.fromData(
+                bytes,
+                name: name,
+                mimeType: mime,
+              );
+              await Share.shareXFiles([xFile]);
+            },
+          ),
+        ],
+      ),
       backgroundColor: Colors.black,
-      body: InteractiveViewer(minScale: 0.5, maxScale: 5, child: Center(child: Image.memory(bytes))),
+      body: InteractiveViewer(
+        minScale: 0.5,
+        maxScale: 5,
+        child: Center(child: Image.memory(bytes)),
+      ),
     );
   }
 }
@@ -1647,7 +2340,6 @@ class _ServerDocCard extends StatefulWidget {
   final VoidCallback? onDelete;
   final bool deleting;
 
-  // NEW
   final VoidCallback? onEdit;
   final VoidCallback? onInfo;
 
@@ -1673,13 +2365,19 @@ class _ServerDocCardState extends State<_ServerDocCard> {
   @override
   void initState() {
     super.initState();
-    if (widget.isImage && widget.doc.url != null && widget.doc.url!.isNotEmpty) {
+    if (widget.isImage &&
+        widget.doc.url != null &&
+        widget.doc.url!.isNotEmpty) {
       _loadBytes();
     }
   }
 
   Future<void> _loadBytes() async {
-    if (_loading || widget.doc.url == null || widget.doc.url!.isEmpty) return;
+    if (_loading ||
+        widget.doc.url == null ||
+        widget.doc.url!.isEmpty) {
+      return;
+    }
     setState(() {
       _loading = true;
       _failed = false;
@@ -1695,7 +2393,9 @@ class _ServerDocCardState extends State<_ServerDocCard> {
       if (!mounted) return;
       setState(() => _failed = true);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -1704,17 +2404,38 @@ class _ServerDocCardState extends State<_ServerDocCard> {
     final name = widget.doc.fileName.toLowerCase();
     final ext = p.extension(name.isNotEmpty ? name : t);
     if (t.startsWith('image/') ||
-        ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic'].contains(ext)) {
+        [
+          '.png',
+          '.jpg',
+          '.jpeg',
+          '.gif',
+          '.webp',
+          '.bmp',
+          '.tif',
+          '.tiff',
+          '.heic'
+        ].contains(ext)) {
       return Icons.image_outlined;
     }
-    if (t.contains('pdf') || ext == '.pdf') return Icons.picture_as_pdf_outlined;
-    if (t.contains('sheet') || t.contains('excel') || ext == '.xls' || ext == '.xlsx' || ext == '.csv') {
+    if (t.contains('pdf') || ext == '.pdf') {
+      return Icons.picture_as_pdf_outlined;
+    }
+    if (t.contains('sheet') ||
+        t.contains('excel') ||
+        ext == '.xls' ||
+        ext == '.xlsx' ||
+        ext == '.csv') {
       return Icons.grid_on_outlined;
     }
-    if (t.contains('word') || ext == '.doc' || ext == '.docx' || ext == '.rtf') {
+    if (t.contains('word') ||
+        ext == '.doc' ||
+        ext == '.docx' ||
+        ext == '.rtf') {
       return Icons.description_outlined;
     }
-    if (t.contains('text') || ext == '.txt' || ext == '.log') {
+    if (t.contains('text') ||
+        ext == '.txt' ||
+        ext == '.log') {
       return Icons.notes_outlined;
     }
     return Icons.insert_drive_file_outlined;
@@ -1722,86 +2443,151 @@ class _ServerDocCardState extends State<_ServerDocCard> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.black12),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Leading preview/icon
-          SizedBox(
-            width: 56,
-            height: 56,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: widget.isImage
-                  ? _imagePreview()
-                  : Container(
-                      color: Colors.grey.shade100,
-                      child: Icon(_iconForType(), color: Colors.black54),
-                    ),
+    return InkWell(
+      onTap: () => _openPreview(context),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.black12),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: [
+            // Leading preview/icon
+            SizedBox(
+              width: 56,
+              height: 56,
+              child: ClipRRect(
+                borderRadius:
+                    BorderRadius.circular(6),
+                child: widget.isImage
+                    ? _imagePreview()
+                    : Container(
+                        color:
+                            Colors.grey.shade100,
+                        child: Icon(
+                            _iconForType(),
+                            color:
+                                Colors.black54),
+                      ),
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          // Title + remarks + actions
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.doc.fileName,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.black87),
-                ),
-                if (widget.doc.remarks.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(widget.doc.remarks, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black54)),
-                ],
-                if (widget.doc.url != null && widget.doc.url!.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(widget.doc.url!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.blueGrey)),
-                ],
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: () => _openPreview(context),
-                      icon: const Icon(Icons.open_in_new, size: 18),
-                      label: const Text('Open'),
-                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+            const SizedBox(width: 12),
+            // Title + remarks + actions
+            Expanded(
+              child: Column(
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.doc.fileName,
+                    maxLines: 2,
+                    overflow:
+                        TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontWeight:
+                            FontWeight.w600,
+                        color: Colors.black87),
+                  ),
+                  if (widget.doc.remarks
+                      .trim()
+                      .isNotEmpty) ...[
+                    const SizedBox(
+                        height: 4),
+                    Text(
+                      widget.doc.remarks,
+                      maxLines: 3,
+                      overflow:
+                          TextOverflow
+                              .ellipsis,
+                      style: const TextStyle(
+                          color: Colors
+                              .black54),
                     ),
-                    const SizedBox(width: 8),
-                    TextButton.icon(
-                      onPressed: () => _shareDoc(context),
-                      icon: const Icon(Icons.share, size: 18),
-                      label: const Text('Share'),
-                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                    ),
-
-                    // IconButton(
-                    //   tooltip: 'Details',
-                    //   onPressed: widget.deleting ? null : widget.onInfo,
-                    //   icon: const Icon(Icons.info_outline, color: Colors.black87),
-                      
-                    // ),
-                    // IconButton(
-                    //   tooltip: 'Rename',
-                    //   onPressed: widget.deleting ? null : widget.onEdit,
-                    //   icon: const Icon(Icons.edit_outlined, color: Colors.black87),
-                    // ),
-
                   ],
-                ),
-              ],
+                  if (widget.doc.url != null &&
+                      widget.doc.url!
+                          .trim()
+                          .isNotEmpty) ...[
+                    const SizedBox(
+                        height: 4),
+                    Text(
+                      widget.doc.url!,
+                      maxLines: 1,
+                      overflow:
+                          TextOverflow
+                              .ellipsis,
+                      style: const TextStyle(
+                          color: Colors
+                              .blueGrey),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Spacer(),
+                      if (widget.onInfo !=
+                          null)
+                        IconButton(
+                          tooltip:
+                              'Details',
+                          onPressed: widget
+                                  .deleting
+                              ? null
+                              : widget
+                                  .onInfo,
+                          icon: const Icon(
+                              Icons
+                                  .info_outline,
+                              color: Colors
+                                  .black87),
+                        ),
+                      if (widget.onEdit !=
+                          null)
+                        IconButton(
+                          tooltip:
+                              'Rename',
+                          onPressed: widget
+                                  .deleting
+                              ? null
+                              : widget
+                                  .onEdit,
+                          icon: const Icon(
+                              Icons
+                                  .edit_outlined,
+                              color: Colors
+                                  .black87),
+                        ),
+                      if (widget.onDelete !=
+                          null)
+                        IconButton(
+                          tooltip:
+                              'Delete',
+                          onPressed: widget
+                                  .deleting
+                              ? null
+                              : widget
+                                  .onDelete,
+                          icon: Icon(
+                              Icons
+                                  .delete_outline,
+                              color: widget.deleting
+                                  ? Colors
+                                      .grey
+                                  : Colors
+                                      .red),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1809,31 +2595,53 @@ class _ServerDocCardState extends State<_ServerDocCard> {
   Widget _imagePreview() {
     if (_loading) {
       return Container(
-        color: Colors.grey.shade100,
+        color:
+            Colors.grey.shade100,
         child: const Center(
-          child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+          child: SizedBox(
+              width: 18,
+              height: 18,
+              child:
+                  CircularProgressIndicator(
+                      strokeWidth: 2)),
         ),
       );
     }
-    if (_failed || _bytes == null || _bytes!.isEmpty) {
+    if (_failed ||
+        _bytes == null ||
+        _bytes!.isEmpty) {
       return Container(
-        color: Colors.grey.shade100,
-        child: const Center(child: Icon(Icons.broken_image_outlined, color: Colors.black38)),
+        color:
+            Colors.grey.shade100,
+        child: const Center(
+            child: Icon(
+                Icons
+                    .broken_image_outlined,
+                color: Colors
+                    .black38)),
       );
     }
-    return Image.memory(_bytes!, fit: BoxFit.cover, width: 56, height: 56);
+    return Image.memory(
+      _bytes!,
+      fit: BoxFit.cover,
+      width: 56,
+      height: 56,
+    );
   }
 
   Future<void> _openPreview(BuildContext context) async {
+    // IMAGE DOCUMENTS → open viewer screen (with share)
     if (widget.isImage) {
       if (_bytes == null || _bytes!.isEmpty) {
-        await _loadBytes();
+        await _loadBytes(); // fetch + cache in memory (session)
       }
       if (!mounted) return;
+
       if (_bytes == null || _bytes!.isEmpty) {
         _snack(context, 'Unable to load image');
         return;
       }
+
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => _ImageViewerScreen(
@@ -1844,60 +2652,87 @@ class _ServerDocCardState extends State<_ServerDocCard> {
       );
       return;
     }
-    if (widget.doc.url != null && widget.doc.url!.isNotEmpty) {
-      await Share.share(widget.doc.url!);
-    } else {
-      _snack(context, 'No preview available');
-    }
+
+    // NON-IMAGE DOCUMENTS → directly share (save + share via temp file)
+    await _shareDoc(context);
   }
 
   Future<void> _shareDoc(BuildContext context) async {
-    if (widget.isImage) {
-      if (_bytes == null || _bytes!.isEmpty) {
-        await _loadBytes();
+    try {
+      Uint8List? data = _bytes;
+
+      // If we don’t have bytes yet, try to download from URL
+      if ((data == null || data.isEmpty) &&
+          widget.doc.url != null &&
+          widget.doc.url!.isNotEmpty) {
+        await _loadBytes(); // will set _bytes
+        data = _bytes;
       }
-      if (!mounted) return;
-      if (_bytes != null && _bytes!.isNotEmpty) {
-        try {
-          final name = _safeFileNameWithExt();
-          final x = XFile.fromData(
-            _bytes!,
-            name: name,
-            mimeType: _inferMimeType(name),
-          );
-          await Share.shareXFiles([x], text: widget.doc.remarks);
-          return;
-        } catch (_) {}
+
+      if (data != null && data.isNotEmpty) {
+        final name = _safeFileNameWithExt();
+        final mime = _inferMimeType(name);
+
+        final x = XFile.fromData(
+          data,
+          name: name,
+          mimeType: mime,
+        );
+
+        await Share.shareXFiles(
+          [x],
+          text: widget.doc.remarks,
+        );
+        return;
       }
+
+      // Fallback: share only text/link
+      final text = StringBuffer()
+        ..writeln(widget.doc.fileName)
+        ..writeln(widget.doc.remarks);
+      if (widget.doc.url != null && widget.doc.url!.isNotEmpty) {
+        text.writeln(widget.doc.url!);
+      }
+      await Share.share(text.toString().trim());
+    } catch (_) {
+      _snack(context, 'Unable to share document');
     }
-    final text = StringBuffer()
-      ..writeln(widget.doc.fileName)
-      ..writeln(widget.doc.remarks);
-    if (widget.doc.url != null && widget.doc.url!.isNotEmpty) {
-      text.writeln(widget.doc.url!);
-    }
-    await Share.share(text.toString().trim());
   }
 
   String _safeFileNameWithExt() {
-    final base = widget.doc.fileName.trim().isNotEmpty ? widget.doc.fileName.trim() : 'document_${widget.doc.id}';
-    String ext = p.extension(base);
+    final base =
+        widget.doc.fileName.trim().isNotEmpty
+            ? widget.doc.fileName.trim()
+            : 'document_${widget.doc.id}';
+    String ext =
+        p.extension(base);
     if (ext.isEmpty) {
-      final t = widget.doc.fileType.toLowerCase();
+      final t =
+          widget.doc.fileType.toLowerCase();
       if (t.startsWith('image/')) {
         ext = '.${t.split('/').last}';
-      } else if (widget.doc.url != null && widget.doc.url!.contains('.')) {
-        ext = p.extension(Uri.parse(widget.doc.url!).path);
+      } else if (widget.doc.url !=
+              null &&
+          widget.doc.url!
+              .contains('.')) {
+        ext = p.extension(Uri.parse(
+                widget.doc.url!)
+            .path);
       } else {
-        ext = widget.isImage ? '.jpg' : '.bin';
+        ext = widget.isImage
+            ? '.jpg'
+            : '.bin';
       }
     }
-    if (!base.endsWith(ext)) return '$base$ext';
+    if (!base.endsWith(ext)) {
+      return '$base$ext';
+    }
     return base;
   }
 
   String _inferMimeType(String name) {
-    final ext = p.extension(name).toLowerCase();
+    final ext =
+        p.extension(name).toLowerCase();
     switch (ext) {
       case '.png':
         return 'image/png';
@@ -1933,6 +2768,8 @@ class _ServerDocCardState extends State<_ServerDocCard> {
   }
 
   void _snack(BuildContext context, String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+            SnackBar(content: Text(msg)));
   }
 }

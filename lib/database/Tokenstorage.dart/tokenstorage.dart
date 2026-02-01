@@ -14,4 +14,4 @@ class TokenStorage {
   static Future<void> clearAll() async {
     await _storage.delete(key: _authTokenKey);
   }
-}
+} 

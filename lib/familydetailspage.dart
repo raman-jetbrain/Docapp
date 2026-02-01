@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:docapp/pages/adduserpage%20.dart';
+import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/utils/famildetailsutility.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,7 +8,6 @@ import 'package:http/http.dart' as http;
 import 'package:docapp/api/api_constant.dart';
 import 'package:docapp/storage/Token_storage.dart';
 import 'package:docapp/model/customer.dart' as model;
-import 'package:docapp/pages/customerdetailpage.dart';
 import 'package:docapp/documentspage.dart';
 
 // ========== Logging helpers ==========
@@ -15,7 +15,9 @@ const bool kLogHttp = true;
 
 String _maskToken(String? v) {
   if (v == null || v.isEmpty) return '';
-  final s = v.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '').trim();
+  final s = v
+      .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '')
+      .trim();
   if (s.length <= 8) return 'Bearer ****';
   return 'Bearer ${s.substring(0, 4)}****${s.substring(s.length - 4)}';
 }
@@ -28,12 +30,16 @@ void logReq({
 }) {
   if (!kLogHttp) return;
   final h = {...?headers};
-  if (h.containsKey('Authorization')) h['Authorization'] = _maskToken(h['Authorization']);
+  if (h.containsKey('Authorization')) {
+    h['Authorization'] = _maskToken(h['Authorization']);
+  }
   debugPrint('[$method] $url');
   debugPrint('Headers: ${jsonEncode(h)}');
   if (body != null) {
     if (body is String) {
-      final trimmed = body.length > 1000 ? '${body.substring(0, 1000)}...(+more)' : body;
+      final trimmed = body.length > 1000
+          ? '${body.substring(0, 1000)}...(+more)'
+          : body;
       debugPrint('Body: $trimmed');
     } else {
       debugPrint('Body: $body');
@@ -44,7 +50,9 @@ void logReq({
 void logRes(http.Response res) {
   if (!kLogHttp) return;
   final body = res.body;
-  final trimmed = body.length > 1500 ? '${body.substring(0, 1500)}...(+more)' : body;
+  final trimmed = body.length > 1500
+      ? '${body.substring(0, 1500)}...(+more)'
+      : body;
   debugPrint('<- ${res.statusCode} ${res.request?.url}');
   debugPrint(trimmed);
 }
@@ -111,7 +119,9 @@ String? _photoDataUrlFromHttpFileData(dynamic hfd) {
 
 String? _cleanBearer(String? token) {
   if (token == null) return null;
-  return token.replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '').trim();
+  return token
+      .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '')
+      .trim();
 }
 
 Map<String, dynamic> _unwrapApiPayload(dynamic raw) {
@@ -140,7 +150,7 @@ String _fmtDob(String? iso) {
 }
 
 // --------------------------------------------------------------------
-//                             FAMILY PAGE
+//                             FAMILY PAGE (Children only)
 // --------------------------------------------------------------------
 class FamilyPage extends StatefulWidget {
   final model.Customer customer;
@@ -185,6 +195,8 @@ class _FamilyPageState extends State<FamilyPage> {
         out.add(m);
       }
     }
+
+    // parent + children + local family
     addMember(_parent);
     for (final c in _serverChildren) {
       addMember(c);
@@ -223,7 +235,8 @@ class _FamilyPageState extends State<FamilyPage> {
 
     try {
       final List<dynamic> customers = json.decode(data);
-      final idx = customers.indexWhere((c) => c['phone'] == widget.customer.phone);
+      final idx =
+          customers.indexWhere((c) => c['phone'] == widget.customer.phone);
       if (idx == -1) {
         setState(() => _family.clear());
         _filter();
@@ -233,10 +246,14 @@ class _FamilyPageState extends State<FamilyPage> {
       final parent = Map<String, dynamic>.from(customers[idx]);
       final famList = (parent['family'] as List?) ?? [];
       final members = famList
-          .map((e) => model.Customer.fromMap(Map<String, dynamic>.from(e as Map)))
+          .map((e) => model.Customer.fromMap(
+                Map<String, dynamic>.from(e as Map),
+              ))
           .toList();
 
-      setState(() => _family..clear()..addAll(members));
+      setState(() => _family
+        ..clear()
+        ..addAll(members));
       _filter();
     } catch (_) {
       setState(() => _family.clear());
@@ -250,7 +267,8 @@ class _FamilyPageState extends State<FamilyPage> {
     final List<dynamic> customers =
         data != null && data.isNotEmpty ? json.decode(data) : [];
 
-    final idx = customers.indexWhere((c) => c['phone'] == widget.customer.phone);
+    final idx =
+        customers.indexWhere((c) => c['phone'] == widget.customer.phone);
     final famMapList = _family.map((m) => m.toMap()).toList();
 
     if (idx != -1) {
@@ -264,9 +282,13 @@ class _FamilyPageState extends State<FamilyPage> {
     await prefs.setString('customers', json.encode(customers));
   }
 
+  /// Filter list and show ONLY children (exclude primary parent).
   void _filter() {
     final q = _searchController.text.toLowerCase();
-    final src = _membersForUI;
+
+    // Exclude primary from the source list
+    final src = _membersForUI.where((m) => !_isPrimary(m)).toList();
+
     setState(() {
       _filtered = src.where((m) {
         final n = m.name.toLowerCase().contains(q);
@@ -330,8 +352,12 @@ class _FamilyPageState extends State<FamilyPage> {
 
   Future<int?> _resolveParentServerIdForChildAdd() async {
     String? idStr = (_parentOverride?.serverId ?? '').toString().trim();
-    if (idStr.isEmpty) idStr = (widget.customer.serverId ?? '').toString().trim();
-    if (idStr.isEmpty) idStr = await _findServerIdInLocalByPhone(_parent.phone);
+    if (idStr.isEmpty) {
+      idStr = (widget.customer.serverId ?? '').toString().trim();
+    }
+    if (idStr.isEmpty) {
+      idStr = await _findServerIdInLocalByPhone(_parent.phone);
+    }
 
     final candidate = int.tryParse(idStr ?? '');
     if (candidate == null) return null;
@@ -342,7 +368,9 @@ class _FamilyPageState extends State<FamilyPage> {
   // Fetch parent; then fetch profile photo for each child by calling GET /GetAsync/{childId}
   Future<void> _fetchParentFromServer() async {
     String? idStr = (widget.customer.serverId ?? '').toString().trim();
-    if (idStr.isEmpty) idStr = await _findServerIdInLocalByPhone(widget.customer.phone);
+    if (idStr.isEmpty) {
+      idStr = await _findServerIdInLocalByPhone(widget.customer.phone);
+    }
     if (idStr == null || idStr.isEmpty) return;
 
     setState(() {
@@ -370,8 +398,7 @@ class _FamilyPageState extends State<FamilyPage> {
         if (map.isEmpty) return;
 
         // Parent photo (prefer base64)
-        final parentPhoto =
-            _photoDataUrlFromHttpFileData(map['HttpFileData']) ??
+        final parentPhoto = _photoDataUrlFromHttpFileData(map['HttpFileData']) ??
             _photoUrlFromHttpFileData(map['HttpFileData']) ??
             _fileUrlFromName(map['Photo']?.toString());
 
@@ -400,11 +427,14 @@ class _FamilyPageState extends State<FamilyPage> {
                 model.Customer(
                   name: (cm['Name'] ?? '').toString(),
                   surname: (cm['Surname'] ?? '').toString(),
-                  phone: (cm['PhoneNumber'] ?? cm['Phone'] ?? '').toString(),
-                  email: (cm['EmailId'] ?? cm['Email'] ?? '').toString(),
+                  phone:
+                      (cm['PhoneNumber'] ?? cm['Phone'] ?? '').toString(),
+                  email:
+                      (cm['EmailId'] ?? cm['Email'] ?? '').toString(),
                   address: (cm['Address'] ?? '').toString(),
                   dob: _fmtDob(cm['DOB']?.toString()),
-                  gender: (cm['Gender'] ?? '').toString().toLowerCase(),
+                  gender:
+                      (cm['Gender'] ?? '').toString().toLowerCase(),
                   customEntries: const [],
                   photo: null, // will fill from child's own GET
                   serverId: childId,
@@ -524,7 +554,9 @@ class _FamilyPageState extends State<FamilyPage> {
       if (mounted) setState(() => _preparingChild = false);
     }
 
-    final display = [_parent.name, _parent.surname].where((e) => e.trim().isNotEmpty).join(' ');
+    final display = [_parent.name, _parent.surname]
+        .where((e) => e.trim().isNotEmpty)
+        .join(' ');
     final newMember = await Navigator.push<model.Customer?>(
       context,
       MaterialPageRoute(
@@ -543,15 +575,17 @@ class _FamilyPageState extends State<FamilyPage> {
       await _saveFamily();
       await _fetchParentFromServer();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Family member added')),
+        const SnackBar(content: Text('Child added')),
       );
     }
   }
 
   Future<void> _removeMember(model.Customer member) async {
     if (_isPrimary(member)) {
+      // primary is not shown in list, but extra safety
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("You can't remove the primary customer.")),
+        const SnackBar(
+            content: Text("You can't remove the primary customer.")),
       );
       return;
     }
@@ -559,17 +593,20 @@ class _FamilyPageState extends State<FamilyPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove Family Member'),
+        title: const Text('Remove Child'),
         content: Text(
           'Do you want to delete ${member.name} ${member.surname}? '
           'This will delete them permanently from the server if synced.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+            child: const Text('Delete',
+                style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -582,18 +619,21 @@ class _FamilyPageState extends State<FamilyPage> {
       if (isServerChild && (member.serverId?.isNotEmpty ?? false)) {
         final token = await TokenStorage.getToken();
         final jwt = _cleanBearer(token);
-        final url = Uri.parse('$_apiBaseNormalized/CustomerDataM/DeleteAsync/${member.serverId}');
+        final url = Uri.parse(
+            '$_apiBaseNormalized/CustomerDataM/DeleteAsync/${member.serverId}');
         final headers = {
           "Accept": "application/json",
-          if (jwt != null && jwt.isNotEmpty) "Authorization": "Bearer $jwt",
+          if (jwt != null && jwt.isNotEmpty)
+            "Authorization": "Bearer $jwt",
         };
-        logReq(method: 'DELETE', url: url.toString(), headers: headers);
+        logReq(
+            method: 'DELETE', url: url.toString(), headers: headers);
         final res = await http.delete(url, headers: headers);
         logRes(res);
 
         if (res.statusCode >= 200 && res.statusCode < 300) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Member deleted successfully.")),
+            const SnackBar(content: Text("Child deleted successfully.")),
           );
           await _fetchParentFromServer();
         } else {
@@ -603,7 +643,8 @@ class _FamilyPageState extends State<FamilyPage> {
         }
       } else {
         setState(() {
-          _family.removeWhere((c) => _dedupeKey(c) == _dedupeKey(member));
+          _family
+              .removeWhere((c) => _dedupeKey(c) == _dedupeKey(member));
           _filter();
         });
         await _saveFamily();
@@ -615,12 +656,40 @@ class _FamilyPageState extends State<FamilyPage> {
     }
   }
 
-  void _openDetails(model.Customer member) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => CustomerDetailPage(customer: member)));
+  void _openDocs(model.Customer member) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => DocumentsPage(customer: member)),
+    );
   }
 
-  void _openDocs(model.Customer member) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => DocumentsPage(customer: member)));
+  /// Open child edit screen with child + parentId
+  void _openChildEdit(model.Customer child) {
+    final parentIdStr =
+        (_parentOverride?.serverId ?? widget.customer.serverId)
+            ?.toString();
+    final parentId = int.tryParse(parentIdStr ?? '');
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerDetailPage(
+          customer: model.Customer(
+            name: child.name,
+            surname: child.surname,
+            phone: child.phone,
+            email: child.email,
+            address: child.address,
+            dob: child.dob,
+            gender: child.gender,
+            customEntries: child.customEntries,
+            photo: child.photo,
+            serverId: child.serverId,
+          ),
+          parentCustomerDataId: parentId,
+        ),
+      ),
+    );
   }
 
   @override
@@ -639,13 +708,16 @@ class _FamilyPageState extends State<FamilyPage> {
             leading: const BackButton(color: Colors.white),
             centerTitle: true,
             title: const Text(
-              "Family",
+              "Children",
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
                 shadows: [
-                  Shadow(blurRadius: 6, color: Colors.black54, offset: Offset(1, 1)),
+                  Shadow(
+                      blurRadius: 6,
+                      color: Colors.black54,
+                      offset: Offset(1, 1)),
                 ],
               ),
             ),
@@ -666,7 +738,8 @@ class _FamilyPageState extends State<FamilyPage> {
             child: Column(
               children: [
                 Padding(
-                  padding: EdgeInsets.symmetric(horizontal: pad, vertical: 15),
+                  padding:
+                      EdgeInsets.symmetric(horizontal: pad, vertical: 15),
                   child: Column(
                     children: [
                       Container(
@@ -675,7 +748,8 @@ class _FamilyPageState extends State<FamilyPage> {
                           borderRadius: BorderRadius.circular(14),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.blueGrey.withOpacity(0.15),
+                              color:
+                                  Colors.blueGrey.withOpacity(0.15),
                               blurRadius: 8,
                               offset: const Offset(0, 4),
                             ),
@@ -684,25 +758,31 @@ class _FamilyPageState extends State<FamilyPage> {
                         child: TextField(
                           controller: _searchController,
                           decoration: const InputDecoration(
-                            prefixIcon: Icon(Icons.search, color: Colors.grey),
-                            hintText: "Search by name, surname or phone",
+                            prefixIcon: Icon(Icons.search,
+                                color: Colors.grey),
+                            hintText:
+                                "Search child by name, surname or phone",
                             border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 14),
                           ),
                         ),
                       ),
                       if (_loadingParent || _loadError != null)
                         Padding(
-                          padding: const EdgeInsets.only(top: 8),
+                          padding:
+                              const EdgeInsets.only(top: 8),
                           child: Align(
                             alignment: Alignment.centerLeft,
                             child: Text(
                               _loadingParent
-                                  ? "Refreshing parent from server..."
+                                  ? "Refreshing children from server..."
                                   : "Error: $_loadError",
                               style: TextStyle(
                                 fontSize: 12,
-                                color: _loadingParent ? Colors.grey : Colors.red,
+                                color: _loadingParent
+                                    ? Colors.grey
+                                    : Colors.red,
                               ),
                             ),
                           ),
@@ -714,28 +794,39 @@ class _FamilyPageState extends State<FamilyPage> {
                   child: _filtered.isEmpty
                       ? const Center(
                           child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisAlignment:
+                                MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.family_restroom_outlined, size: 80, color: Colors.grey),
+                              Icon(Icons.family_restroom_outlined,
+                                  size: 80, color: Colors.grey),
                               SizedBox(height: 10),
-                              Text("No family members found",
-                                  style: TextStyle(color: Colors.grey, fontSize: 16)),
+                              Text("No children found",
+                                  style: TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: 16)),
                             ],
                           ),
                         )
                       : ListView(
-                          padding: EdgeInsets.symmetric(horizontal: pad),
+                          padding: EdgeInsets.symmetric(
+                              horizontal: pad),
                           children: [
-                            Text("Family Members",
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: width * 0.045)),
+                            Text(
+                              "Children",
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: width * 0.045,
+                              ),
+                            ),
                             const SizedBox(height: 10),
                             ..._filtered.map((member) {
                               return CustomerListCard(
                                 member: member,
-                                onTap: () => _openDetails(member),
-                                onDocumentsTap: () => _openDocs(member),
-                                onLongPress: _isPrimary(member) ? null : () => _removeMember(member),
+                                onTap: () => _openChildEdit(member),
+                                onDocumentsTap: () =>
+                                    _openDocs(member),
+                                onLongPress:
+                                    () => _removeMember(member),
                               );
                             }),
                           ],
@@ -753,7 +844,8 @@ class _FamilyPageState extends State<FamilyPage> {
             ? const SizedBox(
                 height: 22,
                 width: 22,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
               )
             : const Icon(Icons.add, color: Colors.white),
       ),
@@ -762,7 +854,7 @@ class _FamilyPageState extends State<FamilyPage> {
 }
 
 // --------------------------------------------------------------------
-//                 CUSTOMER-LIKE CARD FOR FAMILY MEMBERS
+//                 CUSTOMER-LIKE CARD FOR CHILDREN
 // --------------------------------------------------------------------
 class CustomerListCard extends StatelessWidget {
   final model.Customer member;
@@ -809,7 +901,8 @@ class CustomerListCard extends StatelessWidget {
             const SizedBox(width: 15),
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
                 children: [
                   Text(
                     member.name,
@@ -835,7 +928,9 @@ class CustomerListCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     member.phone,
-                    style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
+                    style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.grey.shade700),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],

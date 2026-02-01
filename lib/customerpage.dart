@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+
 import 'package:docapp/api/customer_api_service.dart';
 import 'package:docapp/birthdaylist.dart';
 import 'package:docapp/pages/adduserpage%20.dart';
@@ -29,12 +30,18 @@ class _CustomerScreenState extends State<CustomerScreen> {
   bool _isLoading = false;
   String? _error;
 
+  /// All customer ids that appear as *children* in ChildData (loaded from prefs).
+  Set<String> _childCustomerIds = {};
+  static const String _kChildIdsPrefsKey = 'child_customer_ids';
+
+  /// Count of listed customers (parents only) from GetAllAsync.
+  int _listedCustomerCount = 0;
+
   @override
   void initState() {
     super.initState();
-    _loadLastCustomer();
-    _loadCustomers();
     _searchController.addListener(_filterCustomers);
+    _init();
   }
 
   @override
@@ -43,18 +50,55 @@ class _CustomerScreenState extends State<CustomerScreen> {
     super.dispose();
   }
 
+  /// Initial load: child ids -> last customer -> customers
+  Future<void> _init() async {
+    await _loadChildIdsFromPrefs();
+    await _loadLastCustomer();
+    await _loadCustomers();
+  }
+
+  /// Load child ids previously stored in SharedPreferences.
+  /// These are written there by CustomerApiService.getCustomers() (GetAllAsync).
+  Future<void> _loadChildIdsFromPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList(_kChildIdsPrefsKey) ?? const [];
+    if (!mounted) return;
+    setState(() {
+      _childCustomerIds = ids.toSet();
+    });
+  }
+
+  /// Is this customer record a child (appears in ChildData)?
+  bool _isChildCustomer(model.Customer c) {
+    if (_childCustomerIds.isEmpty) return false;
+    try {
+      final m = c.toMap();
+      final id = (m['serverId'] ?? m['id'] ?? '').toString();
+      if (id.isEmpty) return false;
+      return _childCustomerIds.contains(id);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _loadLastCustomer() async {
     final prefs = await SharedPreferences.getInstance();
     final String? userJson = prefs.getString('last_user');
     if (userJson != null) {
-      final Map<String, dynamic> userMap = Map<String, dynamic>.from(
-        json.decode(userJson),
-      );
+      final Map<String, dynamic> userMap =
+          Map<String, dynamic>.from(json.decode(userJson));
+      final candidate = model.Customer.fromMap(userMap);
+
       if (!mounted) return;
-      setState(() => lastCustomer = model.Customer.fromMap(userMap));
+
+      // Don't treat a child record as "last customer"
+      if (!_isChildCustomer(candidate)) {
+        setState(() => lastCustomer = candidate);
+      }
     }
   }
 
+  /// Trigger BOTH /GetAllAsync and /GetAsync and combine their lists.
   Future<void> _loadCustomers() async {
     setState(() {
       _isLoading = true;
@@ -62,19 +106,78 @@ class _CustomerScreenState extends State<CustomerScreen> {
     });
 
     try {
-      final fresh = await _api.getCustomers();
+      // 1) Get parents + child ids via /api/CustomerDataM/GetAllAsync
+      final fromGetAll = await _api.getCustomers(); // filters children, saves child ids
+      final listedCount = fromGetAll.length;
 
+      // Reload child ids that were just updated by the API service.
+      await _loadChildIdsFromPrefs();
+
+      // 2) Get ALL records via /api/CustomerDataM/GetAsync (no filtering in API)
+      final fromGetAsync = await _api.getCustomersFromGetAsync();
+
+      // 3) Merge both lists by id (GetAsync overrides GetAllAsync when same id)
+      String idOf(model.Customer c) {
+        try {
+          final m = c.toMap();
+          return (m['serverId'] ?? m['id'] ?? '').toString();
+        } catch (_) {
+          return '';
+        }
+      }
+
+      final Map<String, model.Customer> merged = {};
+
+      // First add parents from GetAllAsync
+      for (final c in fromGetAll) {
+        final id = idOf(c);
+        if (id.isNotEmpty) {
+          merged[id] = c;
+        } else {
+          // if no id, just store under a synthetic key
+          merged[UniqueKey().toString()] = c;
+        }
+      }
+
+      // Then add/override with results from GetAsync (including children)
+      for (final c in fromGetAsync) {
+        final id = idOf(c);
+        if (id.isNotEmpty) {
+          merged[id] = c;
+        } else {
+          merged[UniqueKey().toString()] = c;
+        }
+      }
+
+      final fresh = merged.values.toList();
+
+      // 4) Update state with combined list + listed count
       setState(() {
         customers
           ..clear()
           ..addAll(fresh);
-        if (lastCustomer == null && customers.isNotEmpty) {
-          lastCustomer = customers.first;
+
+        _listedCustomerCount = listedCount;
+
+        // Ensure lastCustomer is present in visible list; otherwise pick first.
+        if (lastCustomer == null ||
+            !customers.any((c) {
+              final m = c.toMap();
+              final id = (m['serverId'] ?? m['id'] ?? '').toString();
+              final lm = lastCustomer!.toMap();
+              final lid = (lm['serverId'] ?? lm['id'] ?? '').toString();
+              return id.isNotEmpty && id == lid;
+            })) {
+          lastCustomer = customers.isNotEmpty ? customers.first : null;
         }
       });
 
-      // Save metadata (strip images/b64 to keep storage small)
+      // 5) Save metadata (strip images/b64 to keep storage small)
       final prefs = await SharedPreferences.getInstance();
+
+      // Save listed count so Dashboardpage can read it
+      await prefs.setInt('listed_customer_count', listedCount);
+
       final safeList = customers.map((c) {
         final m = c.toMap();
         m.remove('imageBytes');
@@ -83,11 +186,12 @@ class _CustomerScreenState extends State<CustomerScreen> {
       }).toList();
       await prefs.setString('customers', json.encode(safeList));
 
-      // Background: fetch bytes via FileId if GET did not include real FileData
+      // 6) Background: fetch bytes via FileId if GET did not include real FileData
       Future.microtask(() async {
         try {
           final need = customers.where((c) {
-            final hasBytes = c.imageBytes != null && c.imageBytes!.isNotEmpty;
+            final hasBytes =
+                c.imageBytes != null && c.imageBytes!.isNotEmpty;
             final hasUrl = (c.others ?? '').startsWith('http');
             final fid = c.fileId is int
                 ? c.fileId as int
@@ -99,12 +203,20 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
           final updated = List<model.Customer>.from(customers);
 
-          // Sequential (simple, safe)
           for (final c in need) {
             try {
-              final bytes = await _api.fetchFileBytesById(c.fileId);
+              // Re‑parse fileId safely for each item
+              final fid = c.fileId is int
+                  ? c.fileId as int
+                  : int.tryParse(c.fileId?.toString() ?? '');
+              if (fid == null || fid <= 0) continue;
+
+              // Use numeric id for fetch
+              final bytes = await _api.fetchFileBytesById(fid);
+
               if (bytes != null && bytes.isNotEmpty) {
-                final idx = updated.indexWhere((x) => x.phone == c.phone);
+                final idx =
+                    updated.indexWhere((x) => x.phone == c.phone);
                 if (idx != -1) {
                   final m = updated[idx].toMap();
                   m['imageBytes'] = bytes;
@@ -113,14 +225,16 @@ class _CustomerScreenState extends State<CustomerScreen> {
                 }
               }
             } catch (e, st) {
-              debugPrint('[UI] fileId fetch failed for ${c.fileId}: $e\n$st');
+              debugPrint(
+                  '[UI] fileId fetch failed for ${c.fileId}: $e\n$st');
             }
           }
 
           if (!mounted) return;
 
           final anyImproved = updated.any(
-            (c) => c.imageBytes != null && c.imageBytes!.isNotEmpty,
+            (c) =>
+                c.imageBytes != null && c.imageBytes!.isNotEmpty,
           );
           if (anyImproved) {
             setState(() {
@@ -137,7 +251,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
             });
           }
         } catch (e, st) {
-          debugPrint('[UI] background image hydration failed: $e\n$st');
+          debugPrint(
+              '[UI] background image hydration failed: $e\n$st');
         }
       });
     } catch (e) {
@@ -266,6 +381,16 @@ class _CustomerScreenState extends State<CustomerScreen> {
     if (!mounted) return;
 
     if (newUser != null) {
+      // If for some reason the new user is a child id, we do not show in list
+      if (_isChildCustomer(newUser)) {
+        final prefs = await SharedPreferences.getInstance();
+        final lastUserMap = newUser.toMap()
+          ..remove('imageBytes')
+          ..remove('imageB64');
+        await prefs.setString('last_user', json.encode(lastUserMap));
+        return;
+      }
+
       setState(() {
         lastCustomer = newUser;
         customers.insert(0, newUser);
@@ -302,14 +427,13 @@ class _CustomerScreenState extends State<CustomerScreen> {
     );
   }
 
+  /// Now child records are allowed to open detail page.
   Future<void> _openCustomerDetail(model.Customer baseCustomer) async {
-    // Try to fetch full details by id before navigating
     final baseMap = baseCustomer.toMap();
     final id = (baseMap['serverId'] ?? baseMap['id'] ?? '').toString();
     model.Customer detailed = baseCustomer;
 
     if (id.isNotEmpty) {
-      // small loading dialog
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -321,7 +445,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
       } catch (e) {
         debugPrint('[UI] getCustomerById($id) failed: $e');
       } finally {
-        if (mounted) Navigator.of(context).pop(); // close dialog
+        if (mounted) Navigator.of(context).pop();
       }
     }
 
@@ -395,7 +519,6 @@ class _CustomerScreenState extends State<CustomerScreen> {
               ),
             ),
           ),
-
           SliverFillRemaining(
             child: Column(
               children: [
@@ -421,7 +544,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
                       controller: _searchController,
                       decoration: const InputDecoration(
                         prefixIcon: Icon(Icons.search, color: Colors.grey),
-                        hintText: "Search by name, surname, phone or birthday",
+                        hintText:
+                            "Search by name, surname, phone or birthday",
                         border: InputBorder.none,
                         contentPadding: EdgeInsets.symmetric(
                           horizontal: 20,
@@ -466,8 +590,10 @@ class _CustomerScreenState extends State<CustomerScreen> {
                     child: RefreshIndicator(
                       onRefresh: _loadCustomers,
                       child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: EdgeInsets.symmetric(horizontal: padding),
+                        physics:
+                            const AlwaysScrollableScrollPhysics(),
+                        padding:
+                            EdgeInsets.symmetric(horizontal: padding),
                         children: [
                           if (!isSearching) ...[
                             Text(
@@ -481,7 +607,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
                             if (lastCustomer != null)
                               CustomerCard(
                                 customer: lastCustomer!,
-                                onTap: () => _openCustomerDetail(lastCustomer!),
+                                onTap: () =>
+                                    _openCustomerDetail(lastCustomer!),
                                 onDocumentsTap: () {
                                   Navigator.push(
                                     context,
@@ -494,20 +621,30 @@ class _CustomerScreenState extends State<CustomerScreen> {
                                 },
                               ),
                             const SizedBox(height: 20),
-                            Text(
-                              "All Customers",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: width * 0.045,
-                              ),
+                            Row(
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  "All Customers",
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: width * 0.045,
+                                  ),
+                                ),
+                                Text(
+                                  'Listed: $_listedCustomerCount',
+                                  style: TextStyle(
+                                    fontSize: width * 0.035,
+                                    color: Colors.grey[600],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 10),
                           ],
                           ...filteredCustomers.map((customer) {
-                            if (lastCustomer != null &&
-                                customer.phone == lastCustomer!.phone) {
-                              return const SizedBox.shrink();
-                            }
                             return CustomerCard(
                               customer: customer,
                               onTap: () => _openCustomerDetail(customer),
@@ -558,7 +695,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _buildNavBarItem(Icons.home, 'Home', false, _navigateToDashboard),
+            _buildNavBarItem(
+                Icons.home, 'Home', false, _navigateToDashboard),
             _buildNavBarItem(Icons.group, 'Customers', true, () {}),
             _buildNavBarItem(
               Icons.add_circle,
@@ -604,7 +742,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
             style: TextStyle(
               fontSize: fontSize,
               color: isSelected ? kPrimaryBlue : Colors.grey[400],
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              fontWeight:
+                  isSelected ? FontWeight.bold : FontWeight.normal,
             ),
           ),
         ],
@@ -638,47 +777,58 @@ class CustomerCard extends StatelessWidget {
         v = v.substring(comma + 1);
       }
       v = v.replaceAll(RegExp(r'\s'), '');
-      if (v.toLowerCase() == 'string' || v.startsWith('<base64:')) return null;
+      if (v.toLowerCase() == 'string' || v.startsWith('<base64:')) {
+        return null;
+      }
       return base64Decode(base64.normalize(v));
     } catch (_) {
       return null;
     }
   }
 
-  // Parse various date formats into DateTime
   DateTime? _parseDate(dynamic v) {
     if (v == null) return null;
     if (v is DateTime) return v;
     final s = v.toString().trim();
     if (s.isEmpty) return null;
 
-    // .NET /Date(…)/ ticks (ms)
     final m = RegExp(r'^/Date\((\d+)\)/$').firstMatch(s);
     if (m != null) {
       final ms = int.tryParse(m.group(1)!);
-      if (ms != null) return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+      if (ms != null) {
+        return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true)
+            .toLocal();
+      }
     }
 
-    // ISO or general parseable format
     final iso = DateTime.tryParse(s);
     if (iso != null) return iso.toLocal();
 
-    // dd/MM/yyyy or MM/dd/yyyy or yyyy-MM-dd and common separators
     final parts = s.split(RegExp(r'[-/.\s]'));
     if (parts.length == 3) {
       int? a = int.tryParse(parts[0]);
       int? b = int.tryParse(parts[1]);
       int? c = int.tryParse(parts[2]);
       if (a != null && b != null && c != null) {
-        // Guess: if first > 12 => dd/MM/yyyy else if second > 12 => MM/dd/yyyy
         if (a > 12) {
-          return DateTime.tryParse('${c.toString().padLeft(4, '0')}-${b.toString().padLeft(2, '0')}-${a.toString().padLeft(2, '0')}');
+          return DateTime.tryParse(
+            '${c.toString().padLeft(4, '0')}-'
+            '${b.toString().padLeft(2, '0')}-'
+            '${a.toString().padLeft(2, '0')}',
+          );
         } else if (b > 12) {
-          return DateTime.tryParse('${c.toString().padLeft(4, '0')}-${a.toString().padLeft(2, '0')}-${b.toString().padLeft(2, '0')}');
+          return DateTime.tryParse(
+            '${c.toString().padLeft(4, '0')}-'
+            '${a.toString().padLeft(2, '0')}-'
+            '${b.toString().padLeft(2, '0')}',
+          );
         } else {
-          // fallback: assume yyyy-MM-dd if c is 4-digit year
           if (c > 1900) {
-            return DateTime.tryParse('${a.toString().padLeft(4, '0')}-${b.toString().padLeft(2, '0')}-${c.toString().padLeft(2, '0')}');
+            return DateTime.tryParse(
+              '${a.toString().padLeft(4, '0')}-'
+              '${b.toString().padLeft(2, '0')}-'
+              '${c.toString().padLeft(2, '0')}',
+            );
           }
         }
       }
@@ -688,12 +838,24 @@ class CustomerCard extends StatelessWidget {
 
   String _formatDate(DateTime d) {
     const months = [
-      'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
-    return '${d.day.toString().padLeft(2, '0')} ${months[d.month - 1]} ${d.year}';
+    return '${d.day.toString().padLeft(2, '0')} '
+        '${months[d.month - 1]} '
+        '${d.year}';
   }
 
-  // Extract children/childName and DOB from the model’s map.
   List<String> _extractChildren(model.Customer c) {
     final out = <String>[];
     Map<String, dynamic> m;
@@ -729,7 +891,6 @@ class CustomerCard extends StatelessWidget {
       } else if (v is String) {
         final s = v.trim();
         if (s.isEmpty) return;
-        // Try JSON array text
         if ((s.startsWith('[') && s.endsWith(']')) ||
             (s.startsWith('"') && s.endsWith('"'))) {
           try {
@@ -738,8 +899,8 @@ class CustomerCard extends StatelessWidget {
             return;
           } catch (_) {}
         }
-        // Split by common delimiters
-        s.split(RegExp(r'[;,|]'))
+        s
+            .split(RegExp(r'[;,|]'))
             .map((x) => x.trim())
             .where((x) => x.isNotEmpty)
             .forEach(out.add);
@@ -778,7 +939,6 @@ class CustomerCard extends StatelessWidget {
     if (dobRaw != null) {
       dob = _parseDate(dobRaw);
     }
-    // If API stored ISO in 'dob', parse it
     if (dob == null && dobRaw is String) {
       final tryIso = DateTime.tryParse(dobRaw);
       if (tryIso != null) dob = tryIso.toLocal();
@@ -790,18 +950,16 @@ class CustomerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     ImageProvider? avatar;
 
-    // 1) Prefer bytes from GET
-    if (customer.imageBytes != null && customer.imageBytes!.isNotEmpty) {
+    if (customer.imageBytes != null &&
+        customer.imageBytes!.isNotEmpty) {
       avatar = MemoryImage(customer.imageBytes!);
     }
 
-    // 2) Base64 string
     if (avatar == null && (customer.imageB64 ?? '').isNotEmpty) {
       final bytes = _safeDecodeB64(customer.imageB64);
       if (bytes != null && bytes.isNotEmpty) avatar = MemoryImage(bytes);
     }
 
-    // 3) URL
     if (avatar == null && _looksLikeUrl(customer.others)) {
       avatar = NetworkImage(customer.others!);
     }
@@ -837,15 +995,16 @@ class CustomerCard extends StatelessWidget {
               backgroundColor: Colors.blue.shade50,
               backgroundImage: avatar,
               child: avatar == null
-                  ? const Icon(Icons.person, size: 30, color: Colors.blueGrey)
+                  ? const Icon(Icons.person,
+                      size: 30, color: Colors.blueGrey)
                   : null,
             ),
             const SizedBox(width: 15),
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
                 children: [
-                  // Surname
                   Text(
                     customer.surname,
                     style: const TextStyle(
@@ -856,7 +1015,6 @@ class CustomerCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 4),
-                  // Name
                   Text(
                     customer.name,
                     style: const TextStyle(
@@ -867,18 +1025,21 @@ class CustomerCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 6),
-                  // Phone
                   Text(
                     customer.phone,
-                    style: TextStyle(fontSize: 15, color: Colors.grey.shade700),
+                    style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.grey.shade700),
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (hasChildren) ...[
                     const SizedBox(height: 6),
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.child_care, size: 18, color: Colors.orange),
+                        const Icon(Icons.child_care,
+                            size: 18, color: Colors.orange),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
@@ -904,7 +1065,8 @@ class CustomerCard extends StatelessWidget {
                 backgroundColor: const Color(0xFF38B6E4),
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius:
+                      BorderRadius.circular(12),
                 ),
               ),
               child: const Text("Docs"),

@@ -1,283 +1,341 @@
 import 'dart:convert';
-import 'package:docapp/CustomDrawerPage.dart';
+
 import 'package:docapp/anniversaryevent.dart';
-import 'package:docapp/api/customer_api_service.dart';
+import 'package:docapp/birthdaylist.dart';
 import 'package:docapp/login/Loginpage.dart';
 import 'package:docapp/customerpage.dart';
+import 'package:docapp/model/customer.dart' as model;
 import 'package:docapp/pages/adduserpage%20.dart';
-import 'package:docapp/birthdaylist.dart';
-import 'package:flutter/foundation.dart';
+import 'package:docapp/utils/wish_tracker.dart';
+import 'package:docapp/postereditpage.dart';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
+
+// Use same avatar widget as on Family page
+import 'package:docapp/utils/famildetailsutility.dart';
+
+// Shared customer API service (wraps /GetAllAsync and /GetAsync)
+import 'package:docapp/api/customer_api_service.dart';
 
 const kPrimaryBlue = Color(0xFF3B5998);
 
 class Dashboardpage extends StatefulWidget {
   const Dashboardpage({super.key});
 
-  
-
   @override
   State<Dashboardpage> createState() => _DashboardpageState();
 }
 
+class TodayEventModel {
+  final model.Customer customer;
+  final String name;   // first name only
+  final String type;   // 'Birthday' or 'Anniversary'
+  final String date;   // dd MMM
+  final String phone;
+  final bool isDone;   // used by WishTracker only
+
+  TodayEventModel({
+    required this.customer,
+    required this.name,
+    required this.type,
+    required this.date,
+    required this.phone,
+    required this.isDone,
+  });
+}
+
 class _DashboardpageState extends State<Dashboardpage> {
+  final CustomerApiService _api = CustomerApiService();
+
+  /// Total from /api/CustomerDataM/GetAsync (all records)
   int _customerCount = 0;
+
+  /// Listed/parent count from getCustomers() (GetAllAsync filtered)
+  int _listedCustomerCount = 0;
+
   int _birthdayCount = 0;
   int _anniversaryCount = 0;
+  List<TodayEventModel> _todaysEvents = [];
+  bool _isLoading = false;
+  String? _error;
+
+  /// Parents only, used for events & birthday/anniversary stats
+  List<model.Customer> _allCustomers = [];
 
   static const List<String> _dobKeys = [
-    'dob',
     'DOB',
+    'dob',
     'dateOfBirth',
     'birthdate',
-    'birthDate',
-    'date_of_birth',
-    'birthday',
+    'BirthDate',
   ];
   static const List<String> _annivKeys = [
+    'MarriedDate',
+    'marriedDate',
     'anniversary',
-    'anniversaryDate',
     'wedding_anniversary',
-    'doa',
-    'dom',
-    'dateOfAnniversary',
     'marriageDate',
   ];
 
   @override
   void initState() {
     super.initState();
-    _loadCustomerData();
+    _loadCachedCounts();  // get last known listed count from CustomerScreen
+    _loadFromApi();
   }
 
-  List<Map<String, dynamic>> _decodeCustomers(String jsonStr) {
-    final List<Map<String, dynamic>> out = [];
-    dynamic decoded;
+  Future<void> _loadCachedCounts() async {
     try {
-      decoded = json.decode(jsonStr);
-    } catch (e) {
-      if (kDebugMode) debugPrint('[Dashboard] JSON decode error: $e');
-      return out;
-    }
-
-    void addList(dynamic v) {
-      if (v is List) {
-        for (final e in v) {
-          if (e is Map) out.add(Map<String, dynamic>.from(e));
-        }
-      }
-    }
-
-    if (decoded is List) {
-      addList(decoded);
-    } else if (decoded is Map) {
-      final m = Map<String, dynamic>.from(decoded);
-      final candidates = ['customers', 'data', 'items', 'list', 'result'];
-      bool added = false;
-      for (final k in candidates) {
-        if (m[k] is List) {
-          addList(m[k]);
-          added = true;
-          break;
-        }
-      }
-      if (!added) {
-        out.add(m);
-      }
-    }
-    return out;
-  }
-
-  String? _toDateString(dynamic v) {
-    if (v == null) return null;
-    if (v is String) return v.trim();
-    if (v is int) return v.toString();
-    if (v is double) return v.toInt().toString();
-    if (v is Map) {
-      final ms = v['milliseconds'] ?? v['millis'] ?? v['ms'];
-      if (ms != null) return ms.toString();
-      final sec = v['seconds'] ?? v['secs'] ?? v['s'];
-      if (sec != null) {
-        final s = int.tryParse(sec.toString());
-        if (s != null) return (s * 1000).toString();
-      }
-    }
-    return v.toString();
-  }
-
-  String? _firstDateByKeys(Map<String, dynamic> m, List<String> keys) {
-    for (final k in keys) {
-      if (m.containsKey(k) && m[k] != null) {
-        return _toDateString(m[k]);
-      }
-    }
-    return null;
-  }
-
-  bool _isTodayMonthDay(String? raw) {
-    final dt = _parseDateFlex(raw);
-    if (dt == null) return false;
-    final now = DateTime.now();
-    return dt.day == now.day && dt.month == now.month;
-  }
-
-  DateTime? _parseDateFlex(String? raw) {
-    if (raw == null) return null;
-    final s = raw.trim();
-    if (s.isEmpty) return null;
-
-    if (RegExp(r'^\d+$').hasMatch(s)) {
-      final n = int.tryParse(s);
-      if (n != null) {
-        if (s.length >= 12) return DateTime.fromMillisecondsSinceEpoch(n);
-        if (s.length == 10) {
-          return DateTime.fromMillisecondsSinceEpoch(n * 1000);
-        }
-      }
-    }
-
-    final iso = DateTime.tryParse(s);
-    if (iso != null) return iso.isUtc ? iso.toLocal() : iso;
-
-    final norm = s.replaceAll('/', '-').replaceAll('.', '-');
-    final parts = norm.split('-').where((e) => e.trim().isNotEmpty).toList();
-
-    if (parts.length >= 3) {
-      if (parts[0].length == 4) {
-        final y = int.tryParse(parts[0]) ?? 0;
-        final m = int.tryParse(parts[1]) ?? 0;
-        final d = int.tryParse(parts[2]) ?? 0;
-        if (y > 0 && m > 0 && d > 0) return DateTime(y, m, d);
-      } else {
-        final d = int.tryParse(parts[0]) ?? 0;
-        final m = int.tryParse(parts[1]) ?? 0;
-        int y = int.tryParse(parts[2]) ?? 0;
-        if (y > 0 && y < 100) y += 2000;
-        if (y > 0 && m > 0 && d > 0) return DateTime(y, m, d);
-      }
-    }
-
-    if (parts.length >= 2) {
-      final now = DateTime.now();
-      final d = int.tryParse(parts[0]) ?? 0;
-      final m = int.tryParse(parts[1]) ?? 0;
-      if (m > 0 && d > 0) return DateTime(now.year, m, d);
-    }
-
-    final nums = RegExp(r'\d+').allMatches(s).map((m) => m.group(0)!).toList();
-    if (nums.length >= 3 && nums[0].length == 4) {
-      final y = int.tryParse(nums[0]) ?? 0;
-      final m = int.tryParse(nums[1]) ?? 0;
-      final d = int.tryParse(nums[2]) ?? 0;
-      if (y > 0 && m > 0 && d > 0) return DateTime(y, m, d);
-    } else if (nums.length >= 2) {
-      final now = DateTime.now();
-      final d = int.tryParse(nums[0]) ?? 0;
-      final m = int.tryParse(nums[1]) ?? 0;
-      if (m > 0 && d > 0) return DateTime(now.year, m, d);
-    }
-
-    return null;
-  }
-
-  var customer = CustomerApiService();
-
-  Future<void> _loadCustomerData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final customersJson = prefs.getString('customers');
-
-    if (customersJson == null || customersJson.trim().isEmpty) {
-      if (mounted) {
+      final prefs = await SharedPreferences.getInstance();
+      final listed = prefs.getInt('listed_customer_count');
+      if (mounted && listed != null) {
         setState(() {
-          _customerCount = 0;
-          _birthdayCount = 0;
-          _anniversaryCount = 0;
+          _listedCustomerCount = listed;
         });
       }
-      if (kDebugMode) debugPrint('[Dashboard] No stored customers.');
-      return;
+    } catch (_) {
+      // ignore cache errors
     }
+  }
 
-    final customers = _decodeCustomers(customersJson);
+  // ---------------- Load + compute today's events ----------------
 
-    int birthdayCount = 0;
-    int anniversaryCount = 0;
+  Future<void> _loadFromApi() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
 
-    for (final m in customers) {
-      final dob = _firstDateByKeys(m, _dobKeys);
-      if (_isTodayMonthDay(dob)) birthdayCount++;
+    try {
+      // 1) Get ALL records via /GetAsync (for total count)
+      // 2) Get listed/parent records via GetAllAsync (via getCustomers)
+      final results = await Future.wait([
+        _api.getCustomersFromGetAsync(), // -> /api/CustomerDataM/GetAsync
+        _api.getCustomers(),            // -> /GetAllAsync (parents only)
+      ]);
 
-      final anniv = _firstDateByKeys(m, _annivKeys);
-      if (_isTodayMonthDay(anniv)) anniversaryCount++;
+      final allRecords = results[0];
+      final parents    = results[1];
+
+      if (!mounted) return;
+
+      setState(() {
+        _customerCount        = allRecords.length; // count from GetAsync
+        _listedCustomerCount  = parents.length;    // parents only
+        _allCustomers         = parents;
+      });
+
+      // Compute today's events and birthday/anniversary counts using parents
+      await _computeToday(parents);
+
+      // Optional cache: cache only parents and update listed count cache
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('listed_customer_count', parents.length);
+
+      final safeList = parents.map((c) {
+        final m = c.toMap();
+        m.remove('imageBytes');
+        m.remove('imageB64');
+        return m;
+      }).toList();
+      await prefs.setString('dashboard_customers', json.encode(safeList));
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _computeToday(List<model.Customer> customers) async {
+    final now = DateTime.now();
+    final List<TodayEventModel> events = [];
+    int bCount = 0;
+    int aCount = 0;
+
+    for (final c in customers) {
+      final rawName = (c.name).toString().trim();
+      final firstName =
+          rawName.isNotEmpty ? rawName.split(' ').first : '';
+      final displayName =
+          firstName.isNotEmpty ? firstName : 'Unknown';
+
+      final phone = _customerPhone(c);
+
+      // Birthday
+      final bday = _birthdayOf(c);
+      if (_isSameMonthDay(bday, now)) {
+        bCount++;
+        final done =
+            await WishTracker.isDone(phone: phone, type: 'birthday');
+
+        events.add(
+          TodayEventModel(
+            customer: c,
+            name: displayName,
+            type: 'Birthday',
+            date: bday != null ? DateFormat('dd MMM').format(bday) : '',
+            phone: phone,
+            isDone: done,
+          ),
+        );
+      }
+
+      // Anniversary
+      final anniv = _anniversaryOf(c);
+      if (_isSameMonthDay(anniv, now)) {
+        aCount++;
+        final done =
+            await WishTracker.isDone(phone: phone, type: 'anniversary');
+
+        events.add(
+          TodayEventModel(
+            customer: c,
+            name: displayName,
+            type: 'Anniversary',
+            date: anniv != null ? DateFormat('dd MMM').format(anniv) : '',
+            phone: phone,
+            isDone: done,
+          ),
+        );
+      }
     }
 
     if (mounted) {
       setState(() {
-        _customerCount = customers.length;
-        _birthdayCount = birthdayCount;
-        _anniversaryCount = anniversaryCount;
+        _birthdayCount     = bCount;
+        _anniversaryCount  = aCount;
+        _todaysEvents      = events;
       });
     }
+  }
 
-    if (kDebugMode) {
-      debugPrint(
-        '[Dashboard] customers=$_customerCount birthdays=$_birthdayCount anniversaries=$_anniversaryCount',
+  // ---------------- Helpers ----------------
+
+  String _normalizePhoneStr(String s) {
+    var digits = s.replaceAll(RegExp(r'\D'), '');
+    digits = digits.replaceFirst(RegExp(r'^0+'), '');
+    if (digits.length > 10) {
+      digits = digits.substring(digits.length - 10);
+    }
+    return digits;
+  }
+
+  String _customerPhone(model.Customer c) {
+    String phone = '';
+    try {
+      phone = (c.phone).toString().trim();
+    } catch (_) {
+      final m = c.toMap();
+      phone = (m['PhoneNumber'] ??
+                  m['phone'] ??
+                  m['Phone'] ??
+                  m['mobile'] ??
+                  m['Mobile'] ??
+                  '')
+              .toString()
+              .trim();
+    }
+    return phone;
+  }
+
+  DateTime? _birthdayOf(model.Customer c) {
+    final m = c.toMap();
+    for (final k in _dobKeys) {
+      if (m.containsKey(k) && m[k] != null) {
+        final dt = _parseDate(m[k]);
+        if (dt != null) return dt;
+      }
+    }
+    try {
+      if ((c.dob ?? '').isNotEmpty) {
+        final dt = DateTime.tryParse(c.dob);
+        if (dt != null) return dt;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  DateTime? _anniversaryOf(model.Customer c) {
+    final status = (c.maritalStatus ?? c.toMap()['MaritalStatus'] ?? '')
+        .toString()
+        .toLowerCase();
+    if (status.isNotEmpty && status != 'married') return null;
+
+    final m = c.toMap();
+    for (final k in _annivKeys) {
+      if (m.containsKey(k) && m[k] != null) {
+        final dt = _parseDate(m[k]);
+        if (dt != null) return dt;
+      }
+    }
+    try {
+      if ((c.marriedDate ?? '').isNotEmpty) {
+        final dt = DateTime.tryParse(c.marriedDate!);
+        if (dt != null) return dt;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    final s = value.toString().trim();
+    if (s.isEmpty) return null;
+    try {
+      return DateTime.parse(s);
+    } catch (_) {}
+    final norm = s.replaceAll('/', '-');
+    final parts = norm.split('-');
+    if (parts.length == 3) {
+      int? d = int.tryParse(parts[0]);
+      int? m = int.tryParse(parts[1]);
+      int? y = int.tryParse(parts[2]);
+      if (y != null && m != null && d != null) {
+        return DateTime(y, m, d);
+      }
+    }
+    return null;
+  }
+
+  bool _isSameMonthDay(DateTime? dt, DateTime on) {
+    if (dt == null) return false;
+    if (dt.month == 2 && dt.day == 29) {
+      final isLeap = (on.year % 400 == 0) ||
+          (on.year % 4 == 0 && on.year % 100 != 0);
+      return on.month == 2 && (on.day == 29 || (!isLeap && on.day == 28));
+    }
+    return dt.month == on.month && dt.day == on.day;
+  }
+
+  // ---------------- Navigation & Logic ----------------
+  Future<void> _openPosterForEvent(TodayEventModel event) async {
+    final target = event.customer;
+
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PosterSharePage(
+          customer: target,
+          shareMessage: '',
+        ),
+      ),
+    );
+
+    if (result == true) {
+      final isBirthday = event.type.toLowerCase().contains('birthday');
+      final typeKey = isBirthday ? 'birthday' : 'anniversary';
+
+      await WishTracker.markDone(
+        phone: _customerPhone(target),
+        type: typeKey,
       );
+
+      if (mounted) await _loadFromApi();
     }
   }
 
-  Future<void> _navigateToCustomerScreen() async {
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const CustomerScreen()));
-    if (mounted) _loadCustomerData();
-  }
-
-  Future<void> _navigateTodayEventsPage() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => BirthdayPage()),
-    );
-    if (mounted) _loadCustomerData();
-  }
-
-  // Navigate to Anniversary poster page
-  Future<void> _navigateEventsPage() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => const AnniversaryPage(),
-      ), // no customer required
-    );
-    if (mounted) _loadCustomerData();
-  }
-
-  Future<void> _navigateToAddUserPage() async {
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const AddNewUserPage()));
-    if (mounted) _loadCustomerData();
-  }
-
-  Future<void> _navigateToCustomerDrawerPage() async {
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => AppDrawer()));
-    if (mounted) _loadCustomerData();
-  }
-
-  Future<void> _handleLogout() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('auth_token');
-      await prefs.remove('refresh_token');
-    } catch (_) {}
-    if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => LoginView()),
-      (route) => false,
-    );
-  }
+  // ---------------- UI ----------------
 
   @override
   Widget build(BuildContext context) {
@@ -311,7 +369,6 @@ class _DashboardpageState extends State<Dashboardpage> {
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           ClipRRect(
                             borderRadius: BorderRadius.circular(8),
@@ -331,9 +388,15 @@ class _DashboardpageState extends State<Dashboardpage> {
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white,
                               ),
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 2,
                             ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.refresh, color: Colors.white),
+                            onPressed: _loadFromApi,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.logout, color: Colors.white),
+                            onPressed: _handleLogout,
                           ),
                         ],
                       ),
@@ -347,97 +410,36 @@ class _DashboardpageState extends State<Dashboardpage> {
       ),
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 30),
-              _buildQuickActionsSection(),
-              const SizedBox(height: 30),
-              _buildCustomerStatsSection(),
-              const SizedBox(height: 20),
-            ],
-          ),
-        ),
+        child: _isLoading && _todaysEvents.isEmpty
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                onRefresh: _loadFromApi,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 30),
+                      _buildQuickActionsSection(),
+                      const SizedBox(height: 30),
+                      _buildCustomerStatsSection(),
+                      const SizedBox(height: 30),
+                      _buildTodayEventsSection(),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+              ),
       ),
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
   }
 
-  Widget _buildQuickActionsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Quick Actions',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: kPrimaryBlue,
-          ),
-        ),
-        const SizedBox(height: 15),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(
-              child: _buildActionButton(
-                'Add Customer',
-                Icons.person_add_alt_1_rounded,
-                () => _navigateToAddUserPage(),
-              ),
-            ),
-            const SizedBox(width: 15),
-            Expanded(
-              child: _buildActionButton(
-                'View All',
-                Icons.people_alt,
-                () => _navigateToCustomerScreen(),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildActionButton(String title, IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 120,
-        decoration: BoxDecoration(
-          color: kPrimaryBlue,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: kPrimaryBlue.withOpacity(0.2),
-              blurRadius: 10,
-              offset: const Offset(0, 5),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 40, color: Colors.white),
-            const SizedBox(height: 10),
-            Text(
-              title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildCustomerStatsSection() {
+    // Overall total = total from GetAsync + listed/parents count
+    final int overallTotal = _customerCount + _listedCustomerCount;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -461,42 +463,297 @@ class _DashboardpageState extends State<Dashboardpage> {
                 color: Colors.black.withOpacity(0.1),
                 blurRadius: 15,
                 offset: const Offset(0, 10),
-              ),
+              )
             ],
           ),
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'Total Customers',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black.withOpacity(0.7),
-                  ),
+          child: Row(
+            children: [
+              // TOTAL & breakdown
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Total',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black.withOpacity(0.7),
+                      ),
+                    ),
+                    Text(
+                      '$overallTotal', // overall total number
+                      style: const TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                        color: kPrimaryBlue,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                  ],
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  '$_customerCount',
-                  style: const TextStyle(
-                    fontSize: 48,
-                    fontWeight: FontWeight.bold,
-                    color: kPrimaryBlue,
-                  ),
+              ),
+              Container(width: 1, height: 100, color: Colors.grey[300]),
+              // BIRTHDAY COUNT
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'birthday',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black.withOpacity(0.7),
+                      ),
+                    ),
+                    const Icon(Icons.cake,
+                        color: Colors.pinkAccent, size: 28),
+                    Text(
+                      '$_birthdayCount',
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.pinkAccent,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              // ANNIVERSARY COUNT
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Anniversary',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black.withOpacity(0.7),
+                      ),
+                    ),
+                    const Icon(Icons.favorite,
+                        color: Colors.orangeAccent, size: 28),
+                    Text(
+                      '$_anniversaryCount',
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orangeAccent,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
   }
 
+  // --- TODAY'S EVENTS ---
+  Widget _buildTodayEventsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              "Today's Events",
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: kPrimaryBlue,
+              ),
+            ),
+            Text(
+              DateFormat('MMM dd, yyyy').format(DateTime.now()),
+              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+        const SizedBox(height: 15),
+        if (_todaysEvents.isNotEmpty)
+          SizedBox(
+            height: 140,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: _todaysEvents.length,
+              itemBuilder: (context, index) {
+                final event = _todaysEvents[index];
+                final isBirthday = event.type == 'Birthday';
+
+                return InkWell(
+                  borderRadius: BorderRadius.circular(15),
+                  onTap: () {
+                    if (isBirthday) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const BirthdayPage(),
+                        ),
+                      );
+                    } else {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const AnniversaryPage(),
+                        ),
+                      );
+                    }
+                  },
+                  child: Container(
+                    width: 130,
+                    margin: const EdgeInsets.only(
+                      right: 15,
+                      bottom: 10,
+                      top: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(15),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.08),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // PROFILE IMAGE using same logic as Family page
+                        Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isBirthday
+                                  ? Colors.pinkAccent
+                                  : Colors.orangeAccent,
+                              width: 2,
+                            ),
+                          ),
+                          child: CustomerAvatar(
+                            customer: event.customer,
+                            radius: 26,
+                            bgColor: Colors.grey[100]!,
+                            iconColor: isBirthday
+                                ? Colors.pinkAccent
+                                : Colors.orangeAccent,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        // NAME: first name only (no surname)
+                        Text(
+                          event.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          event.type,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isBirthday
+                                ? Colors.pink
+                                : Colors.orange[800],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  // --- Other widgets ---
+
+  Widget _buildQuickActionsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Quick Actions',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: kPrimaryBlue,
+          ),
+        ),
+        const SizedBox(height: 15),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: _buildActionButton(
+                'Add Customer',
+                Icons.person_add_alt_1_rounded,
+                _navigateToAddUserPage,
+              ),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: _buildActionButton(
+                'View All',
+                Icons.people_alt,
+                _navigateToCustomerScreen,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButton(
+      String title, IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 120,
+        decoration: BoxDecoration(
+          color: kPrimaryBlue,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: kPrimaryBlue.withOpacity(0.2),
+              blurRadius: 10,
+              offset: const Offset(0, 5),
+            )
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 40, color: Colors.white),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBottomNavigationBar() {
     final screenWidth = MediaQuery.of(context).size.width;
     final navHeight = screenWidth * 0.18;
-
     return SafeArea(
       minimum: const EdgeInsets.only(bottom: 12),
       child: Container(
@@ -510,53 +767,54 @@ class _DashboardpageState extends State<Dashboardpage> {
               color: Colors.black.withOpacity(0.15),
               blurRadius: 25,
               offset: const Offset(0, 8),
-            ),
+            )
           ],
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _buildNavBarItem(Icons.home, 'Home', true),
-            _buildNavBarItem(Icons.group, 'Customers', false),
-            _buildNavBarItem(Icons.add_circle, 'Add', false),
-            _buildNavBarItem(Icons.notifications, 'Events', false),
-            _buildNavBarItem(Icons.logout, 'Logout', false),
+            _buildNavBarItem(Icons.home, 'Home', true, null),
+            _buildNavBarItem(
+              Icons.group,
+              'Customers',
+              false,
+              _navigateToCustomerScreen,
+            ),
+            _buildNavBarItem(
+              Icons.add_circle,
+              'Add',
+              false,
+              _navigateToAddUserPage,
+            ),
+            _buildNavBarItem(
+              Icons.notifications,
+              'Events',
+              false,
+              _navigateEventsPage,
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildNavBarItem(IconData icon, String label, bool isSelected) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final iconSize = screenWidth * 0.07;
-    final fontSize = screenWidth * 0.03;
-
+  Widget _buildNavBarItem(
+    IconData icon,
+    String label,
+    bool isSelected,
+    VoidCallback? onTap,
+  ) {
     return InkWell(
-      onTap: () {
-        if (label == 'Customers') {
-          _navigateToCustomerScreen();
-        } else if (label == 'Add') {
-          _navigateToAddUserPage();
-        } else if (label == 'Events') {
-          _navigateEventsPage(); // go to Anniversary poster page
-        } else if (label == 'Logout') {
-          _handleLogout();
-        }
-      },
+      onTap: onTap,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            icon,
-            color: isSelected ? kPrimaryBlue : Colors.grey[400],
-            size: iconSize,
-          ),
+          Icon(icon, color: isSelected ? kPrimaryBlue : Colors.grey[400]),
           const SizedBox(height: 4),
           Text(
             label,
             style: TextStyle(
-              fontSize: fontSize,
+              fontSize: 12,
               color: isSelected ? kPrimaryBlue : Colors.grey[400],
               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             ),
@@ -565,246 +823,38 @@ class _DashboardpageState extends State<Dashboardpage> {
       ),
     );
   }
-}
 
-class Customer {
-  // Core
-  final String name;
-  final String surname;
-  final String phone;
-  final String email;
-  final String address;
-  final String dob; // UI-friendly DOB text (not ISO) for your current screens
-  final String gender;
-
-  // Extras
-  final List<Map<String, String>> customEntries;
-  final String? others; // may contain data URL: data:image/png;base64,....
-  final String? photo; // local photo path (if any)
-
-  // Image handling
-  final Uint8List? imageBytes; // in-memory bytes for immediate UI
-  final String? imageB64; // base64 persisted in storage
-
-  // IDs
-  final String? id; // optional unified id (string), may mirror serverId
-  final String? serverId; // server-side ID (string)
-  final int? fileId; // FileId from server (int)
-  final int? localId; // local auto-increment id (for caching only)
-
-  Customer({
-    required this.name,
-    required this.surname,
-    required this.phone,
-    required this.email,
-    required this.address,
-    required this.dob,
-    required this.gender,
-    required this.customEntries,
-    this.others,
-    this.photo,
-    this.imageBytes,
-    this.imageB64,
-    this.id,
-    this.serverId,
-    this.fileId,
-    this.localId,
-  });
-
-  // -------- Helpers --------
-
-  static String? _stringOrNull(dynamic v) {
-    if (v == null) return null;
-    final s = v.toString().trim();
-    return s.isEmpty ? null : s;
+  Future<void> _navigateToCustomerScreen() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CustomerScreen()),
+    );
+    if (mounted) _loadFromApi();
   }
 
-  static int? _toInt(dynamic v) {
-    if (v == null) return null;
-    if (v is int) return v;
-    if (v is double) return v.toInt();
-    return int.tryParse(v.toString());
+  Future<void> _navigateEventsPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AnniversaryPage()),
+    );
+    if (mounted) _loadFromApi();
   }
 
-  static Uint8List? _decodeB64Image(dynamic v) {
-    if (v == null) return null;
-    var s = v.toString().trim();
-    if (s.isEmpty) return null;
+  Future<void> _navigateToAddUserPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AddNewUserPage()),
+    );
+    if (mounted) _loadFromApi();
+  }
 
-    // Allow data URLs: data:image/png;base64,xxxx
-    final commaIndex = s.indexOf(',');
-    if (commaIndex != -1 &&
-        s.substring(0, commaIndex).toLowerCase().contains('base64')) {
-      s = s.substring(commaIndex + 1);
-    }
-
-    // Remove whitespace/newlines
-    s = s.replaceAll(RegExp(r'\s'), '');
+  Future<void> _handleLogout() async {
     try {
-      return base64Decode(base64.normalize(s));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  static List<Map<String, String>> _coerceCustomEntries(dynamic v) {
-    if (v is List) {
-      return v.map<Map<String, String>>((e) {
-        if (e is Map) {
-          return e.map(
-            (k, val) => MapEntry(k.toString(), val?.toString() ?? ''),
-          );
-        }
-        return <String, String>{};
-      }).toList();
-    }
-    return <Map<String, String>>[];
-  }
-
-  // -------- Mapping --------
-
-  factory Customer.fromMap(Map<String, dynamic> m) {
-    // Resolve IDs
-    final String? idStr = _stringOrNull(
-      m['id'] ??
-          m['Id'] ??
-          m['ID'] ??
-          m['CustomerId'] ??
-          m['CustomerID'] ??
-          m['CustomerDataMId'] ??
-          m['CustomerDataMID'] ??
-          m['CustomerDataId'] ??
-          m['CustomerDataID'],
-    );
-
-    final String? serverId = _stringOrNull(
-      m['serverId'] ?? m['ServerId'] ?? m['ServerID'] ?? idStr,
-    );
-
-    // Resolve FileId (if present)
-    final dynamic httpFile = m['HttpFileData'] ?? m['httpFileData'];
-    final int? fileId = _toInt(
-      m['fileId'] ??
-          m['FileId'] ??
-          (httpFile is Map ? (httpFile['Id'] ?? httpFile['FileId']) : null),
-    );
-
-    // Resolve image bytes from multiple possible sources
-    Uint8List? bytes;
-    // 1) direct imageBytes (bytes or base64 string)
-    final dynamic imgField = m['imageBytes'];
-    if (imgField is Uint8List && imgField.isNotEmpty) {
-      bytes = imgField;
-    } else if (imgField is String && imgField.isNotEmpty) {
-      bytes = _decodeB64Image(imgField);
-    }
-
-    // 2) imageB64 (base64 string)
-    String? imageB64 = _stringOrNull(m['imageB64']);
-    if (bytes == null && imageB64 != null) {
-      bytes = _decodeB64Image(imageB64);
-    }
-
-    // 3) Others may contain a data URL
-    final String? others = _stringOrNull(m['others'] ?? m['Others']);
-    if (bytes == null && others != null && others.startsWith('data:image')) {
-      bytes = _decodeB64Image(others);
-    }
-
-    // If we decoded bytes but had no imageB64, create one for persistence
-    imageB64 ??= (bytes != null && bytes.isNotEmpty)
-        ? base64Encode(bytes)
-        : null;
-
-    return Customer(
-      name: _stringOrNull(m['name'] ?? m['Name']) ?? '',
-      surname: _stringOrNull(m['surname'] ?? m['Surname']) ?? '',
-      phone: _stringOrNull(m['phone'] ?? m['Phone'] ?? m['PhoneNumber']) ?? '',
-      email: _stringOrNull(m['email'] ?? m['Email'] ?? m['EmailId']) ?? '',
-      address: _stringOrNull(m['address'] ?? m['Address']) ?? '',
-      dob: _stringOrNull(m['dob'] ?? m['DOB'] ?? m['SDOB']) ?? '',
-      gender: _stringOrNull(m['gender'] ?? m['Gender']) ?? '',
-      customEntries: _coerceCustomEntries(m['customEntries']),
-      others: others,
-      photo: _stringOrNull(m['photo']),
-      imageBytes: bytes,
-      imageB64: imageB64,
-      id: idStr,
-      serverId: serverId,
-      fileId: fileId,
-      localId: _toInt(m['localId']),
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    // Prefer to include imageB64 (safe for JSON). Avoid raw imageBytes in JSON.
-    final String? outB64 =
-        imageB64 ??
-        (imageBytes != null && imageBytes!.isNotEmpty
-            ? base64Encode(imageBytes!)
-            : null);
-
-    return <String, dynamic>{
-      // IDs
-      if (id != null) 'id': id,
-      if (serverId != null) 'serverId': serverId,
-      if (fileId != null) 'fileId': fileId,
-      if (localId != null) 'localId': localId,
-
-      // Core
-      'name': name,
-      'surname': surname,
-      'phone': phone,
-      'email': email,
-      'address': address,
-      'dob': dob,
-      'gender': gender,
-
-      // Extras
-      'customEntries': customEntries,
-      if (others != null) 'others': others,
-      if (photo != null) 'photo': photo,
-
-      // Image persistence
-      if (outB64 != null) 'imageB64': outB64,
-    };
-  }
-
-  Customer copyWith({
-    String? name,
-    String? surname,
-    String? phone,
-    String? email,
-    String? address,
-    String? dob,
-    String? gender,
-    List<Map<String, String>>? customEntries,
-    String? others,
-    String? photo,
-    Uint8List? imageBytes,
-    String? imageB64,
-    String? id,
-    String? serverId,
-    int? fileId,
-    int? localId,
-  }) {
-    return Customer(
-      name: name ?? this.name,
-      surname: surname ?? this.surname,
-      phone: phone ?? this.phone,
-      email: email ?? this.email,
-      address: address ?? this.address,
-      dob: dob ?? this.dob,
-      gender: gender ?? this.gender,
-      customEntries: customEntries ?? this.customEntries,
-      others: others ?? this.others,
-      photo: photo ?? this.photo,
-      imageBytes: imageBytes ?? this.imageBytes,
-      imageB64: imageB64 ?? this.imageB64,
-      id: id ?? this.id,
-      serverId: serverId ?? this.serverId,
-      fileId: fileId ?? this.fileId,
-      localId: localId ?? this.localId,
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('auth_token');
+    } catch (_) {}
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => LoginView()),
+      (route) => false,
     );
   }
 }
